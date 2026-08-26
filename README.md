@@ -94,6 +94,15 @@ Top speed on our **own** kernel path, the **bigger KV pool**, **and** the day-0 
 
 ---
 
+## ⚠️ Stability notes (benchmark peak vs production)
+
+The **70 tok/s / 1.05M-KV config above is a benchmark peak**, and on a day-0 stack it is *aggressive*. Under sustained multi-agent load it crashed twice within ~90 minutes, two different ways:
+
+1. **OOM (GB10 UMA page-cache trap).** At `--mem-fraction-static 0.82` + a 1.05M-token KV pool + PLE host-pinning, free headroom is thin (~17GB). GB10 shares one 128GB pool between GPU and CPU; heavy file IO grows the OS page cache and starves the GPU allocator → `NV_ERR_NO_MEMORY` → the worker dies, NCCL takes the head with it. **`drop_caches` before every launch is mandatory**, and on a busy box keep `--mem-fraction-static ≤ 0.80` for transient headroom (KV drops to ~850K, still huge).
+2. **CUDA device-side assert in the multimodal-rope path** (`_compute_mrope_positions_extend`) with CUDA graphs on — a compute-path fault, not memory. The captured-graph multimodal path is not bulletproof on this day-0 image.
+
+**For a shared production endpoint, prefer the conservative config:** `--mem-fraction-static 0.80`, and consider `--disable-cuda-graph` (≈55 tok/s peak, agent-safe, and it sidesteps the graph-captured mrope assert). Run the 70-config when you want the headline number on a quiet box, not as a 24/7 agent backend. This section is the honest "where we stand today" — it'll firm up as the day-0 SGLang stack matures (or DFlash2/DSpark lands).
+
 ## 📦 Deploy
 
 Copy [`launch-qwen38fn-sglang-tp2.sh`](./launch-qwen38fn-sglang-tp2.sh) to `~` on **both** nodes.

@@ -1,8 +1,10 @@
-# Qwen3.8-Flash-Next-NVFP4 on 2× DGX Spark (TP2, SGLang)
+# Qwen3.8-Flash-Next-NVFP4 on 2× DGX Spark (TP2 + MTP4, SGLang)
 
 Day-zero deployment of **Qwen3.8-Flash-Next** (NVFP4 quant) served across **two NVIDIA DGX Spark (GB10 / SM121)** boxes as tensor-parallel-2, over the 200G ConnectX fabric. Brought up live on **2026-08-26**, the day the model dropped.
 
-**Live result:** serving on `:8000`, 262,144-token context, ~20 decode tok/s, TTFT ~0.66s.
+**Live result:** serving on `:8000`, 262,144-token context, **~33 decode tok/s with MTP4 speculative decoding on** (up from ~20 tok/s without — about **64% faster**), TTFT ~0.5s.
+
+The model ships a built-in MTP layer (`mtp_num_hidden_layers: 1`), so speculative decode needs **no separate draft checkpoint** — it self-speculates via NEXTN/EAGLE. See the launcher and the "MTP4" section below.
 
 ---
 
@@ -82,13 +84,23 @@ Uvicorn running on http://0.0.0.0:8000
 
 OpenAI streaming chat-completions, `max_tokens=200`, temp 0, TTFT to first content/reasoning delta, decode = `(tokens-1)/(end-first_token)`:
 
+Baseline (no speculative decode):
+
 | Run | TTFT | Decode tok/s |
 |---:|---:|---:|
 | 1 | 0.358s | 20.57 |
 | 2 | 0.657s | 20.04 |
 | 3 | 1.178s | 19.43 |
 
-**Median: 0.66s TTFT, 20.0 decode tok/s.** CUDA graphs are **disabled** in this first stable bring-up (`--disable-cuda-graph`); re-enabling is a separate benchmarked change.
+**With MTP4 speculative decode on** (NEXTN/EAGLE, 3 steps, top-k 1, 4 draft tokens, ReplaySSM):
+
+| Run | TTFT | Decode tok/s |
+|---:|---:|---:|
+| 1 | 0.485s | 26.24 |
+| 2 | 0.695s | 32.78 |
+| 3 | 0.182s | 35.57 |
+
+**Median jumps from 20.0 → 32.8 decode tok/s (~64% faster).** Draft acceptance ran ~0.36–0.56 across live traffic. MTP weights add only ~1.9GB and load in ~56s. CUDA graphs are **disabled** in this first stable bring-up (`--disable-cuda-graph`); re-enabling is a separate benchmarked change.
 
 ---
 

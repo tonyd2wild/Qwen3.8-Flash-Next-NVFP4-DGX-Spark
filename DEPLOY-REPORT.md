@@ -3,7 +3,7 @@
 Deployment date: 2026-08-26  
 Endpoint: `http://100.92.77.51:8000/v1`  
 Model: `qwen3.8-flash-next`  
-Final status: **SERVING on Bluey + Asusi as TP2**
+Final status: **SERVING on Bluey + Asusi as TP2 with MTP4**
 
 Operator directive after deployment: **leave Qwen up; do not restore DeepSeek/DS4**.
 
@@ -20,6 +20,9 @@ All timestamps below include UTC and America/New_York (EDT, UTC-04:00).
 | Final launch: Asusi worker rank 1 | 2026-08-26 14:38:33 | 2026-08-26 10:38:33 |
 | Final launch: Bluey head rank 0 | 2026-08-26 14:39:13 | 2026-08-26 10:39:13 |
 | SERVING / Uvicorn ready | 2026-08-26 14:45:31 | 2026-08-26 10:45:31 |
+| MTP4 restart: Asusi worker rank 1 | 2026-08-26 14:56:55 | 2026-08-26 10:56:55 |
+| MTP4 restart: Bluey head rank 0 | 2026-08-26 14:57:19 | 2026-08-26 10:57:19 |
+| MTP4 SERVING / Uvicorn ready | 2026-08-26 15:04:42 | 2026-08-26 11:04:42 |
 
 Download verification receipts:
 
@@ -159,6 +162,11 @@ docker run --gpus all -d \
     --page-size 64 \
     --mamba-scheduler-strategy extra_buffer \
     --mamba-track-interval 64 \
+    --speculative-algorithm NEXTN \
+    --speculative-num-steps 3 \
+    --speculative-eagle-topk 1 \
+    --speculative-num-draft-tokens 4 \
+    --enable-linear-replayssm-spec \
     --chunked-prefill-size 4096 \
     --max-running-requests 6 \
     --context-length 262144 \
@@ -288,6 +296,47 @@ Benchmark request: OpenAI chat-completions streaming, `max_tokens=200`, temperat
 | 3 | 1.1779 s | 11.4202 s | 200 | 19.429 |
 
 Middle/median result: **0.6572 s TTFT, 20.043 decode tok/s**.
+
+### MTP4 restart validation
+
+The checkpoint contains one built-in MTP layer (`mtp_num_hidden_layers: 1`). It was relaunched with the image's Qwen3.8 MTP4 recipe: NEXTN/EAGLE, three speculative steps, top-k 1, four draft tokens, and ReplaySSM speculation. No separate draft checkpoint is required.
+
+```text
+speculative_algorithm='EAGLE'
+speculative_draft_model_path='/models/qwen3.8-flash-next-nvfp4'
+speculative_num_steps=3
+speculative_eagle_topk=1
+speculative_num_draft_tokens=4
+speculative_draft_model_quantization='modelopt_fp4'
+enable_linear_replayssm_spec=True
+```
+
+```text
+Load weight end. elapsed=55.60 s, type=Qwen4ExpForCausalLMMTP,
+quant=modelopt_fp4, quant_algo=NVFP4, mem usage=1.90 GB.
+QSA MTP index sharing enabled: draft decode steps reuse the
+draft-extend selection for layers [0]
+```
+
+MTP4 scheduler receipts under real generation traffic:
+
+```text
+mamba num: 4, accept len: 2.67, accept rate: 0.56
+mamba num: 4, accept len: 2.20, accept rate: 0.40
+mamba num: 4, accept len: 2.15, accept rate: 0.38
+mamba num: 4, accept len: 2.08, accept rate: 0.36
+mamba num: 4, accept len: 2.62, accept rate: 0.54
+```
+
+Three post-MTP4 200-token runs:
+
+| Run | TTFT | Total | Completion tokens | Decode tok/s |
+|---:|---:|---:|---:|---:|
+| 1 | 0.4848 s | 8.0695 s | 200 | 26.237 |
+| 2 | 0.6945 s | 6.7645 s | 200 | 32.784 |
+| 3 | 0.1823 s | 5.7762 s | 200 | 35.574 |
+
+Post-MTP4 median decode: **32.784 tok/s**, versus **20.043 tok/s** before MTP4 (about **63.6% faster** on this three-run prompt test).
 
 ## 7. Final fleet state
 

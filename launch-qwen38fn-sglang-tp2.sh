@@ -58,6 +58,11 @@ docker run --gpus all -d \
     --page-size 64 \
     --mamba-scheduler-strategy extra_buffer \
     --mamba-track-interval 64 \
+    --speculative-algorithm NEXTN \
+    --speculative-num-steps 3 \
+    --speculative-eagle-topk 1 \
+    --speculative-num-draft-tokens 4 \
+    --enable-linear-replayssm-spec \
     --chunked-prefill-size 4096 \
     --max-running-requests 6 \
     --context-length 262144 \

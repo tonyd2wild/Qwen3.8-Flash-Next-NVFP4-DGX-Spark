@@ -173,6 +173,8 @@ docker run --gpus all -d \
     --mem-fraction-static 0.78 \
     --allow-auto-truncate \
     --reasoning-parser auto \
+    --tool-call-parser qwen3_coder \
+    --default-chat-template-kwargs '{"enable_thinking": false}' \
     --trust-remote-code \
     --disable-cuda-graph
 
@@ -337,6 +339,28 @@ Three post-MTP4 200-token runs:
 | 3 | 0.1823 s | 5.7762 s | 200 | 35.574 |
 
 Post-MTP4 median decode: **32.784 tok/s**, versus **20.043 tok/s** before MTP4 (about **63.6% faster** on this three-run prompt test).
+
+### Warmed re-benchmark (2026-08-26 evening, on-box localhost)
+
+The three-run MTP4 table above was a cold snapshot taken seconds after the MTP4 restart (draft acceptance still 0.36–0.56). A later warmed re-bench, run **on the head node against `127.0.0.1:8000`** (no Tailscale hop in the decode timing), shows the real content-dependent spread:
+
+| Content type | Decode tok/s | vs no-MTP (20.0) |
+|---|---:|---:|
+| Counting / highly predictable | 54.6 | 2.7x |
+| Alphabet / repetitive | 50.7 | 2.5x |
+| Code generation | 46.9 | 2.3x |
+| Mixed / typical (median of 10 runs) | 33.2 | 1.65x |
+| Dense freeform reasoning prose | 34.1 | 1.7x |
+
+Speculative-decode throughput scales with draft acceptance, and acceptance tracks output predictability. Structured/agentic output (code, lists, tool arguments) drafts near-perfectly → **~50–55 tok/s**; unpredictable prose → **~33**. This resolves the "33 vs 52" question: both are real, different content regimes; agent/tool workloads live at the top of the range. No-MTP baseline (plain autoregressive, deterministic) stays at 20.0.
+
+### mem-fraction 0.78 → 0.82 relaunch (2026-08-26 evening)
+
+Later the same evening the pair was relaunched at `--mem-fraction-static 0.82` (up from 0.78) since it runs dedicated — no H3/other co-tenant to protect. Clean both-nodes-down-first sequence. Result: KV cache grew **390,208 → 561,024 tokens (+44%)**, `available_gpu_mem=16.07 GB` per node after the memory pool (no GB10 cliff). Decode speeds were re-confirmed identical (peak 55.7 tok/s counting, 47.6 code, 34.7 prose essay) — as expected, mem-fraction changes KV headroom, not throughput. Tool-with-thinking-off behavior re-verified clean (`reasoning_tokens: 0`, `finish_reason: stop`, no `!` loop).
+
+### The `!!!!` token-0 loop bug (found + fixed same evening)
+
+After the deploy, long agentic OMP sessions degraded into an endless `!!!!` stream. Root cause is the upstream day-0 SGLang bug [sgl-project/sglang#36537](https://github.com/sgl-project/sglang/issues/36537): thinking + OpenAI `tools` + `--tool-call-parser qwen3_coder` makes the model emit token ID 0 in a loop (token 0 decodes as `!`). Fix = a server-side thinking-off default added to the launcher on both nodes: `--default-chat-template-kwargs '{"enable_thinking": false}'` (parser kept, tool calls verified structured with `reasoning_tokens: 0`). Full write-up in [`KNOWN-ISSUES-thinking-tool-loop.md`](./KNOWN-ISSUES-thinking-tool-loop.md).
 
 ## 7. Final fleet state
 

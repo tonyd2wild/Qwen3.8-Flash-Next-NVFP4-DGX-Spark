@@ -66,9 +66,11 @@ docker run --gpus all -d \
     --chunked-prefill-size 4096 \
     --max-running-requests 6 \
     --context-length 262144 \
-    --mem-fraction-static 0.78 \
+    --mem-fraction-static 0.82 \
     --allow-auto-truncate \
     --reasoning-parser auto \
+    --tool-call-parser qwen3_coder \
+    --default-chat-template-kwargs '{"enable_thinking": false}' \
     --trust-remote-code \
     --disable-cuda-graph
 

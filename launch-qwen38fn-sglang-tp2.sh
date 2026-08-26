@@ -72,7 +72,11 @@ docker run --gpus all -d \
     --tool-call-parser qwen3_coder \
     --default-chat-template-kwargs '{"enable_thinking": false}' \
     --trust-remote-code \
-    --disable-cuda-graph
+    --ple-offload-embedding \
+    --cuda-graph-max-bs 8 \
+    --disable-cuda-graph-padding \
+    --disable-radix-cache \
+    --sampling-backend pytorch
 
 echo "launched $NAME rank=$NODE_RANK"
 sleep 2

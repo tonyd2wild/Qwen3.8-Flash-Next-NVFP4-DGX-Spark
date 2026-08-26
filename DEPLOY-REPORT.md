@@ -421,3 +421,27 @@ max-out: 33K
 thinking: minimal,low,medium,high
 images: yes
 ```
+
+---
+
+## LOCKED CONFIG (2026-08-26 evening) — where we stand today
+
+Final serve args after the CUDA-graph + agent-safety tuning pass (this is the launcher in the repo):
+
+```
+--speculative-algorithm NEXTN --speculative-num-steps 3 --speculative-eagle-topk 1
+--speculative-num-draft-tokens 4 --enable-linear-replayssm-spec
+--context-length 262144 --mem-fraction-static 0.82
+--reasoning-parser auto --tool-call-parser qwen3_coder
+--default-chat-template-kwargs '{"enable_thinking": false}'
+--ple-offload-embedding --cuda-graph-max-bs 8 --disable-cuda-graph-padding
+--disable-radix-cache --sampling-backend pytorch --trust-remote-code
+```
+
+Measured on this config:
+- **Decode: 70.2 tok/s peak (code/predictable), ~47 typical, 20 no-MTP.**
+- **KV pool: 1,049,344 tokens** (mem-fraction 0.82 + PLE offload + radix-cache off), ~17GB free/rank.
+- **Loop (token-0 `!` bug):** clean at temp 0.0 / 0.2 / 0.7 across the exact agentic reproducer; residual only at temp 1.0. Cap agent temp ≤0.7.
+- Context 262K native; YaRN to ~1M optional.
+
+Not "final" — a snapshot until DFlash2/DSpark or a better speculative-decode path ships.

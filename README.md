@@ -16,9 +16,10 @@ Serving on `:8000`, **MTP4 speculative decode + CUDA graphs both ON**, warmed:
 | 🧠 **KV cache pool** (pinned, OOM-safe) | **600,000 tokens** |
 | 📏 Context (native) | 262,144 (YaRN-scalable to ~1M) |
 | ⏱️ TTFT (warmed) | ~0.2 s |
-| 🛡️ Stability | **all 3 day-0 crashes fixed** (see below) |
+| 🖼️ **Vision / image input** | **ON** (full multimodal) |
+| 🛡️ OOM | **fixed** (KV pinned, ~23GB free) |
 
-That's up to **3.5× over the no-MTP baseline**, and it **matches/beats the fastest published dual-Spark recipe** (MiaAI-Lab, ~64–67 tok/s single-stream) on our own kernel path with no borrowed code — while being **crash-clean under sustained agent load** (three distinct day-0 crashes root-caused and fixed, [see the Stability section](#-stability-the-three-day-0-crashes-and-the-stable-70-fix-solved-2026-08-26)). KV is pinned at 600K for OOM safety; the 1.05M pool is reachable at mem 0.82 with no pin but OOMs under load, so the pin is the production default.
+That's up to **3.5× over the no-MTP baseline**, and it **matches/beats the fastest published dual-Spark recipe** (MiaAI-Lab, ~64–67 tok/s single-stream) on our own kernel path with no borrowed code — with **full vision kept on** and the **OOM crash fixed** (KV pinned). One residual day-0 edge remains (a rare multimodal-rope assert under cuda graphs); it is handled *without* sacrificing vision — see the [Stability section](#️-stability-notes-oom-fixed-vision-kept-one-residual-day-0-risk). KV is pinned at 600K for OOM safety; the 1.05M pool is reachable at mem 0.82 with no pin but OOMs under load, so the pin is the production default.
 
 ---
 
@@ -95,28 +96,26 @@ Top speed on our **own** kernel path, the **bigger KV pool**, **and** the day-0 
 
 ---
 
-## ✅ Stability: the three day-0 crashes, and the stable-70 fix (SOLVED 2026-08-26)
+## ⚠️ Stability notes (OOM fixed; vision kept; one residual day-0 risk)
 
-The headline throughput originally came from an *aggressive* config (mem 0.82, 1.05M-KV, cuda graphs on) that crashed **three** different ways under sustained multi-agent load. All three are now fixed, and the fixes cost almost nothing — the locked config below holds **~70 tok/s AND is crash-clean**:
+The headline throughput came from an *aggressive* config (mem 0.82, 1.05M-KV, cuda graphs on). Under sustained multi-agent load it exposed two day-0 issues. **Vision (image input) is a hard requirement, so any "fix" that turns the model text-only is off the table** — the config below keeps full multimodal.
 
-1. **OOM — GB10 UMA page-cache trap.** At `--mem-fraction-static 0.82` + a 1.05M-token KV pool + PLE host-pinning, free headroom is thin (~17GB). GB10 shares one 128GB pool between GPU and CPU; heavy file IO grows the OS page cache and starves the GPU allocator → `NV_ERR_NO_MEMORY` → the worker dies, NCCL takes the head with it.
-   **Fix:** pin the KV pool with `--max-total-tokens 600000` + `--mem-fraction-static 0.80`. Free headroom jumps to ~23GB and the pool can't grow into starvation. `drop_caches` before every launch stays mandatory. (600K tokens is still ~2 agents at full 262K, or many smaller sessions.)
+1. **OOM — GB10 UMA page-cache trap (FIXED).** At `--mem-fraction-static 0.82` + a 1.05M-token KV pool + PLE host-pinning, free headroom is thin (~17GB). GB10 shares one 128GB pool between GPU and CPU; heavy file IO grows the OS page cache and starves the GPU allocator → `NV_ERR_NO_MEMORY` → the worker dies, NCCL takes the head with it.
+   **Fix:** pin the KV pool with `--max-total-tokens 600000` + `--mem-fraction-static 0.80`. Free headroom jumps to ~23GB and the pool can't grow into starvation. `drop_caches` before every launch stays mandatory. (600K tokens is still ~2 agents at full 262K, or many smaller sessions.) This fix is orthogonal to vision and always applies.
 
-2. **CUDA device-side assert in the multimodal-rope path** (`_compute_mrope_positions_extend`) — a compute fault, not memory. The multimodal rope-position kernel runs even on text requests because the model is *declared* multimodal, and it faults under captured graphs.
-   **Fix:** `--json-model-override-args '{"language_model_only": true}'` flips `model_is_mrope=False`, so the crashing kernel never runs. Loss-free for text/agent workloads (all we serve), keeps cuda graphs.
+2. **CUDA device-side assert in the multimodal-rope path** (`_compute_mrope_positions_extend`), under captured graphs — a rare compute fault seen once in ~90 min of load. **We do NOT suppress it by going text-only** (an earlier `language_model_only` override killed the mrope kernel *and* image input — not acceptable; removed). Vision-preserving handling:
+   - **Speed config (default):** keep cuda graphs on → **~70 tok/s peak, full vision**, accept the rare mrope assert as a known day-0 edge (auto-restart with `--restart` covers a one-off).
+   - **Bulletproof fallback:** add `--disable-cuda-graph` → **~55 tok/s peak, full vision, no graph-captured mrope assert.** Use this if the assert ever bites a 24/7 endpoint.
+   Either way vision stays on. This firms up as the day-0 SGLang stack matures (or DFlash2/DSpark lands).
 
-3. **QSA prefill-graph capture crash** (exposed by fix #2). With `language_model_only`, prefill routes through the QSA sparse indexer, whose `get_prefill_mqa_inputs` does an **unpinned GPU→CPU `.tolist()`** that CUDA-graph capture forbids (`Cannot copy between CPU and CUDA tensors during CUDA graph capture unless the CPU tensor is pinned`).
-   **Fix:** `--disable-prefill-cuda-graph` drops the prefill graph (it only helps TTFT). BUT that graph was *also* accelerating the MTP-verify step, so dropping it naively costs ~14 tok/s (70 → 56).
-   **Recover the 70:** `--speculative-attention-mode decode` routes MTP-verify through the **decode** graph (which captures clean) instead of the prefill graph → verify acceleration comes back → **69.7 tok/s peak, stable.**
-
-### 🔒 The locked stable-70 flags (all four, on top of the base MTP4 recipe)
+### 🔒 The locked flags (on top of the base MTP4 recipe — full multimodal)
 ```
---max-total-tokens 600000 --mem-fraction-static 0.80         # OOM pin (~23GB free headroom)
---json-model-override-args '{"language_model_only": true}'   # mrope assert fix
---disable-prefill-cuda-graph                                 # QSA prefill-capture crash fix
---speculative-attention-mode decode                          # routes MTP-verify onto the decode graph = recovers the 70
+--max-total-tokens 600000 --mem-fraction-static 0.80   # OOM pin (~23GB free headroom)
+--cuda-graph-max-bs 8 --disable-cuda-graph-padding     # decode+prefill graphs on = the 70 (drop for ~55 bulletproof)
+--ple-offload-embedding --disable-radix-cache          # KV headroom + loop-fix
+--default-chat-template-kwargs '{"enable_thinking": false}' --sampling-backend pytorch   # loop-fix stack
 ```
-Measured on this exact config: **69.7 tok/s peak** (count), 63 code, 56 alphabet, 44 essay; content clean, `reasoning_tokens=0`, tool calls parse clean (`qwen3_coder`), decode-graph captured 100%, ~23GB free. **No OOM, no mrope assert, no QSA crash.** This is a genuinely stable 70 (not a fragile benchmark peak) — the honest "where we stand today" until DFlash2 / DSpark lands. KV is pinned at 600K for OOM safety; you can still reach the 1.05M pool at mem 0.82 with no pin, but it OOMs under sustained load, so the pin is the production default.
+**Vision/image input stays ON.** Measured ~70 tok/s peak on code/structured (the 1.05M KV pool is reachable at mem 0.82 with no pin, but OOMs under load, so 600K-pinned is the production default). The `!!!!` token-0 loop fix (thinking-off + radix-off + pytorch sampling, temp ≤0.7) is unchanged and independent of the above.
 
 ## 📦 Deploy
 

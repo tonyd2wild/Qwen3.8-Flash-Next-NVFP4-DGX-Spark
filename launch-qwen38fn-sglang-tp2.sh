@@ -63,7 +63,6 @@ docker run --gpus all -d \
     --speculative-eagle-topk 1 \
     --speculative-num-draft-tokens 4 \
     --enable-linear-replayssm-spec \
-    --speculative-attention-mode decode \
     --chunked-prefill-size 4096 \
     --max-running-requests 6 \
     --context-length 262144 \
@@ -73,12 +72,10 @@ docker run --gpus all -d \
     --reasoning-parser auto \
     --tool-call-parser qwen3_coder \
     --default-chat-template-kwargs '{"enable_thinking": false}' \
-    --json-model-override-args '{"language_model_only": true}' \
     --trust-remote-code \
     --ple-offload-embedding \
     --cuda-graph-max-bs 8 \
     --disable-cuda-graph-padding \
-    --disable-prefill-cuda-graph \
     --disable-radix-cache \
     --sampling-backend pytorch
 

@@ -1,0 +1,66 @@
+# Custom model routes for omp.
+#
+# `models:` MUST be a LIST -- each entry starts with `- id:`. Dropping the dash
+# turns it into a single mapping and omp refuses the file with
+#   providers.<name>.models: must be an array (was an object)
+# which also loses the model id, so nothing under that provider is selectable.
+#
+# Both of these are local vLLM servers on the tailnet, reached through their
+# RELAYS rather than a single lane. A relay round-robins across two lanes,
+# health-checks them, and re-homes traffic when one dies; pinning a lane loses
+# that failover and leaves the other GPU pair idle.
+#
+# `auth: none` because these endpoints are genuinely keyless -- the honest
+# declaration, rather than inventing a credential that does not exist.
+#
+# contextWindow values are what each server actually reports, not what the model
+# card claims. Over-declaring is the dangerous direction: the request is refused
+# once history passes the real cap, mid-task.
+
+providers:
+
+  # DeepSeek V4 Flash, through the relay fronting Bluey and Reddie.
+  #
+  # Text only. It cannot take an image -- but it does not need to: omp's
+  # `images.describeForTextModels` and the `inspect_image` tool hand any image
+  # to the model in modelRoles.vision (Qwen, below) and give this one the text.
+  dspark:
+    baseUrl: http://100.91.157.18:8100/v1
+    api: openai-completions
+    auth: none
+    models:
+      - id: deepseek-v4-flash-dspark
+        name: DeepSeek V4 Flash
+        contextWindow: 512000
+        maxTokens: 32768
+
+  # Qwen 3.8 27B, through the relay fronting both 3090 GPU pairs.
+  #
+  # Genuinely multimodal, and omp detects that from the endpoint itself --
+  # `omp models qwen-relay` reports images: yes with nothing declared here.
+  # This is also the model doing the seeing for DeepSeek.
+  qwen-relay:
+    baseUrl: http://100.113.64.18:8010/v1
+    api: openai-completions
+    auth: none
+    models:
+      - id: qwen3.8-27b
+        name: Qwen 3.8 27B
+        # 234000, not 262144 -- that is what the server reports.
+        contextWindow: 234000
+        maxTokens: 32768
+
+  # Qwen 3.8 Flash Next NVFP4, TP2 on Bluey (head) + Asusi.
+  # Direct OpenAI-compatible SGLang endpoint; keep this route while the
+  # deployment remains live. The server reports a 262144-token context limit.
+  qwen38fn-nvfp4:
+    baseUrl: http://100.92.77.51:8000/v1
+    api: openai-completions
+    auth: none
+    models:
+      - id: qwen3.8-flash-next
+        name: Qwen 3.8 Flash Next NVFP4
+        input: [text, image]
+        reasoning: true
+        contextWindow: 262144
+        maxTokens: 32768

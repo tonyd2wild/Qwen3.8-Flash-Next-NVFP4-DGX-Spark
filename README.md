@@ -10,14 +10,15 @@ Serving on `:8000`, **MTP4 speculative decode + CUDA graphs both ON**, warmed:
 
 | | |
 |---|---:|
-| ⚡ **Peak decode** (code / structured / agentic) | **70.2 tok/s** |
-| 🚀 Typical mixed prompts | ~47 tok/s |
+| ⚡ **Peak decode** (code / structured / agentic) | **69.7 tok/s** |
+| 🚀 Typical mixed prompts | ~50 tok/s |
 | 🐢 No-MTP baseline | ~20 tok/s |
-| 🧠 **KV cache pool** | **1,049,344 tokens** |
+| 🧠 **KV cache pool** (pinned, OOM-safe) | **600,000 tokens** |
 | 📏 Context (native) | 262,144 (YaRN-scalable to ~1M) |
 | ⏱️ TTFT (warmed) | ~0.2 s |
+| 🛡️ Stability | **all 3 day-0 crashes fixed** (see below) |
 
-That's up to **3.5× over the no-MTP baseline**, it **beats the fastest published dual-Spark recipe** (MiaAI-Lab, ~64–67 tok/s single-stream) on our own kernel path with no borrowed code, and the **KV pool (>1M tokens) is larger than theirs (~956K)**.
+That's up to **3.5× over the no-MTP baseline**, and it **matches/beats the fastest published dual-Spark recipe** (MiaAI-Lab, ~64–67 tok/s single-stream) on our own kernel path with no borrowed code — while being **crash-clean under sustained agent load** (three distinct day-0 crashes root-caused and fixed, [see the Stability section](#-stability-the-three-day-0-crashes-and-the-stable-70-fix-solved-2026-08-26)). KV is pinned at 600K for OOM safety; the 1.05M pool is reachable at mem 0.82 with no pin but OOMs under load, so the pin is the production default.
 
 ---
 
@@ -94,14 +95,28 @@ Top speed on our **own** kernel path, the **bigger KV pool**, **and** the day-0 
 
 ---
 
-## ⚠️ Stability notes (benchmark peak vs production)
+## ✅ Stability: the three day-0 crashes, and the stable-70 fix (SOLVED 2026-08-26)
 
-The **70 tok/s / 1.05M-KV config above is a benchmark peak**, and on a day-0 stack it is *aggressive*. Under sustained multi-agent load it crashed twice within ~90 minutes, two different ways:
+The headline throughput originally came from an *aggressive* config (mem 0.82, 1.05M-KV, cuda graphs on) that crashed **three** different ways under sustained multi-agent load. All three are now fixed, and the fixes cost almost nothing — the locked config below holds **~70 tok/s AND is crash-clean**:
 
-1. **OOM (GB10 UMA page-cache trap).** At `--mem-fraction-static 0.82` + a 1.05M-token KV pool + PLE host-pinning, free headroom is thin (~17GB). GB10 shares one 128GB pool between GPU and CPU; heavy file IO grows the OS page cache and starves the GPU allocator → `NV_ERR_NO_MEMORY` → the worker dies, NCCL takes the head with it. **`drop_caches` before every launch is mandatory**, and on a busy box keep `--mem-fraction-static ≤ 0.80` for transient headroom (KV drops to ~850K, still huge).
-2. **CUDA device-side assert in the multimodal-rope path** (`_compute_mrope_positions_extend`) with CUDA graphs on — a compute-path fault, not memory. The captured-graph multimodal path is not bulletproof on this day-0 image.
+1. **OOM — GB10 UMA page-cache trap.** At `--mem-fraction-static 0.82` + a 1.05M-token KV pool + PLE host-pinning, free headroom is thin (~17GB). GB10 shares one 128GB pool between GPU and CPU; heavy file IO grows the OS page cache and starves the GPU allocator → `NV_ERR_NO_MEMORY` → the worker dies, NCCL takes the head with it.
+   **Fix:** pin the KV pool with `--max-total-tokens 600000` + `--mem-fraction-static 0.80`. Free headroom jumps to ~23GB and the pool can't grow into starvation. `drop_caches` before every launch stays mandatory. (600K tokens is still ~2 agents at full 262K, or many smaller sessions.)
 
-**For a shared production endpoint, prefer the conservative config:** `--mem-fraction-static 0.80`, and consider `--disable-cuda-graph` (≈55 tok/s peak, agent-safe, and it sidesteps the graph-captured mrope assert). Run the 70-config when you want the headline number on a quiet box, not as a 24/7 agent backend. This section is the honest "where we stand today" — it'll firm up as the day-0 SGLang stack matures (or DFlash2/DSpark lands).
+2. **CUDA device-side assert in the multimodal-rope path** (`_compute_mrope_positions_extend`) — a compute fault, not memory. The multimodal rope-position kernel runs even on text requests because the model is *declared* multimodal, and it faults under captured graphs.
+   **Fix:** `--json-model-override-args '{"language_model_only": true}'` flips `model_is_mrope=False`, so the crashing kernel never runs. Loss-free for text/agent workloads (all we serve), keeps cuda graphs.
+
+3. **QSA prefill-graph capture crash** (exposed by fix #2). With `language_model_only`, prefill routes through the QSA sparse indexer, whose `get_prefill_mqa_inputs` does an **unpinned GPU→CPU `.tolist()`** that CUDA-graph capture forbids (`Cannot copy between CPU and CUDA tensors during CUDA graph capture unless the CPU tensor is pinned`).
+   **Fix:** `--disable-prefill-cuda-graph` drops the prefill graph (it only helps TTFT). BUT that graph was *also* accelerating the MTP-verify step, so dropping it naively costs ~14 tok/s (70 → 56).
+   **Recover the 70:** `--speculative-attention-mode decode` routes MTP-verify through the **decode** graph (which captures clean) instead of the prefill graph → verify acceleration comes back → **69.7 tok/s peak, stable.**
+
+### 🔒 The locked stable-70 flags (all four, on top of the base MTP4 recipe)
+```
+--max-total-tokens 600000 --mem-fraction-static 0.80         # OOM pin (~23GB free headroom)
+--json-model-override-args '{"language_model_only": true}'   # mrope assert fix
+--disable-prefill-cuda-graph                                 # QSA prefill-capture crash fix
+--speculative-attention-mode decode                          # routes MTP-verify onto the decode graph = recovers the 70
+```
+Measured on this exact config: **69.7 tok/s peak** (count), 63 code, 56 alphabet, 44 essay; content clean, `reasoning_tokens=0`, tool calls parse clean (`qwen3_coder`), decode-graph captured 100%, ~23GB free. **No OOM, no mrope assert, no QSA crash.** This is a genuinely stable 70 (not a fragile benchmark peak) — the honest "where we stand today" until DFlash2 / DSpark lands. KV is pinned at 600K for OOM safety; you can still reach the 1.05M pool at mem 0.82 with no pin, but it OOMs under sustained load, so the pin is the production default.
 
 ## 📦 Deploy
 

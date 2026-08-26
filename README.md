@@ -1,4 +1,4 @@
-# Qwen3.8-Flash-Next-NVFP4 on 2× DGX Spark (TP2 + MTP4, SGLang)
+# Qwen3.8-Flash-Next-NVFP4 On 2× DGX Spark (TP2 + MTP4, SGLang)
 
 Day-zero deployment of **Qwen3.8-Flash-Next** (NVFP4 quant) served across **two NVIDIA DGX Spark (GB10 / SM121)** boxes as tensor-parallel-2, over the 200G ConnectX fabric. Brought up live on **2026-08-26**, the day the model dropped.
 

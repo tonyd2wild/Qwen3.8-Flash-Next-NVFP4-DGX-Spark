@@ -145,3 +145,31 @@ Full deployment log with every timestamp, receipt, and failure/fix: [`DEPLOY-REP
 ---
 
 Brought up + tuned by the 2Wild fleet ([@Tech2Wild](https://x.com/Tech2Wild)) on race day, 2026-08-26. Companion fleet repo (both this lane + a 3090 GGUF lane): https://github.com/tonyd2wild/Qwen3.8-Flash-Next-Fleet-Deploy
+
+## Update 2026-08-27 — vision restored at the 70-class config, two new root causes nailed
+
+The deployed config now runs FULL MULTIMODAL with CUDA graphs, on a patched
+image `radixark/sglang-qwen38flashnext:sm121-qsa-mrope1` (build recipe:
+`Dockerfile.qwen38fn-sm121-mrope`). Two findings since the last commit:
+
+1. **The mrope CUDA device-side assert has a mechanism** (NVRM Xid 43 = the
+   software assert, NOT a hardware fault): qwen4_exp is the first M-RoPE model
+   with partial rotary, and the fused mrope Triton kernel reads out of bounds
+   for it on every image call. One-line mask bound in the Dockerfile above.
+   Full analysis + fix ladder: `MROPE-ANALYSIS.md`. Fresh forensics show the
+   assert firing in EAGLE speculative prefill — if it recurs on patched
+   images, the next surgical fix is the position clamp (option 3 in the
+   analysis).
+
+2. **`--disable-radix-cache` silently collapses the mamba/SSM state pool** to
+   `max_running_requests` (6 states instead of 97) — under 6 concurrent agents
+   the pool exhausts (`mamba usage: 1.00`) and every stream degenerates to
+   token-0 `!!!!` spam, identical symptom to the thinking+tools loop but a
+   different bug. Fix now in the launcher: `--max-mamba-cache-size 97`.
+   Single-request smokes CANNOT catch this; run `load_test_qwen.py` (6-way
+   concurrent tool-carrying load test) after every config change and check the
+   boot line `Mamba Cache is allocated ... 97`.
+
+Full incident timeline and receipts: `INCIDENT-2026-08-27-mrope-and-mamba.md`.
+The launcher in this repo is the verified stable config (vision on, mamba pool
+pinned, thinking off, temp <= 0.7, auto-restart).

@@ -9,7 +9,7 @@ NODE_RANK="${1:?usage: launch-qwen38fn-sglang-tp2.sh <0|1>}"
   exit 2
 }
 
-IMAGE="radixark/sglang-qwen38flashnext:sm121-qsa"
+IMAGE="radixark/sglang-qwen38flashnext:sm121-qsa-mrope1"
 NAME="sglang_qwen38fn"
 MODEL_HOST_PATH="/var/tmp/models/qwen3.8-flash-next-nvfp4"
 MODEL_PATH="/models/qwen3.8-flash-next-nvfp4"
@@ -25,7 +25,7 @@ mkdir -p "$CACHE_HOST_PATH"
 docker rm -f "$NAME" 2>/dev/null || true
 
 docker run --gpus all -d \
-  --name "$NAME" --restart no \
+  --name "$NAME" --restart unless-stopped \
   --memory 110g --memory-swap 110g \
   --network host --ipc host --shm-size 32g \
   --ulimit memlock=-1:-1 --cap-add IPC_LOCK \
@@ -58,11 +58,13 @@ docker run --gpus all -d \
     --page-size 64 \
     --mamba-scheduler-strategy extra_buffer \
     --mamba-track-interval 64 \
+    --max-mamba-cache-size 97 \
     --speculative-algorithm NEXTN \
     --speculative-num-steps 3 \
     --speculative-eagle-topk 1 \
     --speculative-num-draft-tokens 4 \
     --enable-linear-replayssm-spec \
+    --speculative-attention-mode decode \
     --chunked-prefill-size 4096 \
     --max-running-requests 6 \
     --context-length 262144 \
@@ -76,6 +78,7 @@ docker run --gpus all -d \
     --ple-offload-embedding \
     --cuda-graph-max-bs 8 \
     --disable-cuda-graph-padding \
+    --disable-prefill-cuda-graph \
     --disable-radix-cache \
     --sampling-backend pytorch
 

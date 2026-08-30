@@ -81,6 +81,12 @@ Three levers stacked to get past 1M:
    - `--sampling-backend pytorch` (rules out the FlashInfer kernel arg-maxing a stale row to token 0)
    - Result: the loop is **clean at temp 0.0 / 0.2 / 0.7** (every temperature agents actually use); a residual edge remains only at **temp 1.0** (max-creativity, not used for tool-calling). **Recommendation: cap agent temp ≤ 0.7.** Full write-up: [`KNOWN-ISSUES-thinking-tool-loop.md`](./KNOWN-ISSUES-thinking-tool-loop.md).
 
+   **↔ Community-reported alternative (kernel-level, NOT yet tested by us):** the stack above *works around* the token-0 loop by disabling radix + cuda-graph-padding and forcing pytorch sampling. Multiple independent DGX Spark / GB10 operators (incl. [MiaAI-Lab](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks)) report a deeper **root-cause** fix that keeps radix **and** CUDA graphs ON:
+   - force `_resolve_trtllm_sparse_decode` → `None` on SM121 (ports [sglang#36806](https://github.com/sgl-project/sglang/pull/36806)) so the FlashInfer TRT-LLM sparse-decode path — which silently corrupts long-context decode on GB10 — never runs;
+   - return a Triton **packed one-query varlen** fallback from `_resolve_flash_attn_varlen_func` when `is_sm121()`, reading `cu_seqlens` **on-device** so CUDA-graph replay stays valid (ports [sglang#36845](https://github.com/sgl-project/sglang/pull/36845));
+   - in the patched image: zero non-finite QSA output, abort after 16 consecutive token-0 samples (instead of filling `max_tokens`), skip inserting that completion into radix, reset the prefix cache before the next prefill.
+   ⚠️ **We have not validated this on our lane** (not taking the live Flash deployment down to test it), but it is corroborated by multiple operators and is the likely path to reclaim the radix + cuda-graph-padding throughput our workaround gives up. Reference kernel: [`community-fix/sm121_varlen.py`](./community-fix/sm121_varlen.py). Credit: MiaAI-Lab + the SGLang maintainers (#36806 / #36845).
+
 MTP weights add ~1.9GB (load ~56s). CUDA-graph capture costs ~0.4GB.
 
 ---

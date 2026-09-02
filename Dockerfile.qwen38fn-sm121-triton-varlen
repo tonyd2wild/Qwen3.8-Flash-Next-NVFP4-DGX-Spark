@@ -1,0 +1,64 @@
+# STAGED FIX — NOT YET DEPLOYED OR TESTED ON OUR FLEET (2026-08-28).
+#
+# This is the upstream-blessed replacement for our original SM121 approach.
+# Upstream verdict (sglang PR #36806, MERGED 2026-08-28): the FlashInfer
+# TRT-LLM sparse-decode kernel SILENTLY CORRUPTS LONG CONTEXT on SM121/GB10 —
+# token-ID-0 ("!") corruption in 1/4 runs at 120K tokens rising to 4/4 at
+# 210K, with HTTP 200 throughout. Our previous images (sm121-qsa,
+# sm121-qsa-mrope1) force-enable exactly that kernel; they are fine for short
+# contexts and fast, but unsafe past ~120K.
+#
+# The fix (sglang PR #36845, open, validated on DGX Spark at 262K with zero
+# corruption): never TRT-LLM on SM121; use a purpose-built Triton
+# online-softmax packed-varlen kernel for QSA decode instead. The PR diff is
+# bundled in this repo as pr36845.diff.
+#
+# Build starts from the CLEAN day-0 image (not our sm121-qsa derivative,
+# whose guard change conflicts with the PR's resolver rewrite), applies the
+# PR, then re-applies our mrope partial-rotary OOB fix (separate vision bug,
+# still required — see MROPE-ANALYSIS.md).
+#
+# BEFORE DEPLOYING: (1) `docker build` must pass the git-apply --check —
+# if it fails, the day-0 image's source has drifted from the PR base and the
+# diff needs a rebase; (2) run the 90-min+ long-context soak (>120K-token
+# sessions — short smokes CANNOT catch the TRT-LLM corruption this replaces);
+# (3) run load_test_qwen.py (6-way concurrent) for the mamba/loop class;
+# (4) keep --max-mamba-cache-size 97 and the thinking-off default in the
+# launcher — this image changes kernels, not those bugs.
+
+FROM lmsysorg/sglang:qwen38flashnext
+
+COPY pr36845.diff /tmp/pr36845.diff
+
+# PR #36845: SM121 Triton packed-varlen QSA decode (never TRT-LLM on SM121).
+RUN cd /sgl-workspace/sglang && \
+    (git apply --check -p1 /tmp/pr36845.diff || { echo "PR 36845 no longer applies cleanly - source drifted, rebase the diff"; exit 1; }) && \
+    git apply -p1 --verbose /tmp/pr36845.diff
+
+# mrope partial-rotary OOB fix (same patch as sm121-qsa-mrope1): qwen4_exp is
+# the first M-RoPE model with partial rotary; the fused mrope Triton kernel's
+# temporal mask is unbounded above the rotary cache row width, causing OOB
+# reads on every image call. Bounding it is a no-op for full-rotary models.
+RUN python3 - <<'PY'
+import glob
+from pathlib import Path
+
+cands = [p for p in glob.glob("/sgl-workspace/sglang/**/rotary_triton.py", recursive=True)]
+if len(cands) != 1:
+    raise SystemExit(f"expected exactly one rotary_triton.py, found: {cands}")
+path = Path(cands[0])
+src = path.read_text()
+
+old = "t_mask = ~(h_mask | w_mask)"
+new = "t_mask = ~(h_mask | w_mask) & (cos_offsets < half_rd)"
+if new in src:
+    raise SystemExit("already patched; refusing to double-patch")
+if src.count(old) < 1:
+    raise SystemExit("unbounded t_mask pattern not found; source drifted, refusing to patch")
+for var in ("cos_offsets", "half_rd"):
+    if var not in src:
+        raise SystemExit(f"expected variable {var} missing from kernel; refusing to patch")
+
+path.write_text(src.replace(old, new))
+print(f"PATCHED {path}: bounded t_mask")
+PY

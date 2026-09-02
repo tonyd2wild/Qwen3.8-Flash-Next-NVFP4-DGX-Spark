@@ -28,7 +28,8 @@ That's up to **3.5× over the no-MTP baseline**, and it **matches/beats the fast
 Qwen3.8-Flash-Next is a **125B-A3B hybrid MoE** with a **51B PLE (n-gram) embedding table** and a built-in **4B MTP head**, arch id `qwen4_exp` / `Qwen4ExpForConditionalGeneration`. Brand new, so:
 
 1. **vLLM cannot serve it yet.** Neither the arm64 vLLM image nor the spark-vllm nightly registers `Qwen4ExpForConditionalGeneration`. **Use SGLang.**
-2. **The official SGLang day-0 image needs one patch on DGX Spark.** Its QSA sparse-decode resolver gates the fast FlashInfer TRT-LLM kernel behind `is_sm100_supported()`, so on SM121 (GB10) it falls back to an FA4 CUTE path that **dies in warmup** (`MLIRError: coord and shape weakly congruent` → SIGQUIT). Fix = a one-line guard extension that also accepts `is_sm120_supported()` after a real head-shape probe. That's the deployed image `radixark/sglang-qwen38flashnext:sm121-qsa`.
+2. **The official SGLang day-0 image needs one patch on DGX Spark.** Its QSA sparse-decode resolver gates the fast FlashInfer TRT-LLM kernel behind `is_sm100_supported()`, so on SM121 (GB10) it falls back to an FA4 CUTE path that **dies in warmup** (`MLIRError: coord and shape weakly congruent` → SIGQUIT). Our day-0 fix was a one-line guard extension that also accepts `is_sm120_supported()` after a real head-shape probe — the deployed image `radixark/sglang-qwen38flashnext:sm121-qsa`.
+   **⚠️ 2026-08-28 UPDATE — that guard extension is now known-unsafe past ~120K context.** Upstream ([sglang #36806](https://github.com/sgl-project/sglang/pull/36806), merged) proved the TRT-LLM sparse-decode kernel **silently corrupts long context on SM121**: token-ID-0 (`!`) corruption in 1/4 runs at 120K tokens rising to 4/4 at 210K, HTTP 200 throughout, short requests 50/50 clean. The correct route is [sglang #36845](https://github.com/sgl-project/sglang/pull/36845): never TRT-LLM on SM121, use its purpose-built Triton packed-varlen kernel (validated at 262K, zero corruption). **Staged in this repo as `Dockerfile.qwen38fn-sm121-triton-varlen` + `pr36845.diff` — see the update section below.**
 3. **It's big.** 328GB at FP8 / ~126GB at NVFP4 → ~76GB weights/rank at TP2, fits a GB10's ~120GB unified pool with room to spare.
 
 ---
@@ -72,7 +73,7 @@ Three levers stacked to get past 1M:
 
 1. **Day-0 bring-up:** MTP4 on, CUDA graphs off, mem 0.78. Agent-safe, conservative. 20 → 33 typ / 55 peak.
 2. **More KV:** mem 0.78 → 0.82. KV +44%, decode unchanged.
-3. **⚡ CUDA graphs ON:** dropped `--disable-cuda-graph`, added `--cuda-graph-max-bs 8`. Our SM121 QSA guard uses the **FlashInfer TRT-LLM decode kernel, which turns out cuda-graph-capture-safe** — so no Triton fallback port needed (unlike other recipes). Lifted the whole curve: **33 → 47 typ, 55 → 70.2 peak.** ✅ Beat the field.
+3. **⚡ CUDA graphs ON:** dropped `--disable-cuda-graph`, added `--cuda-graph-max-bs 8`. Our SM121 QSA guard uses the **FlashInfer TRT-LLM decode kernel, which turns out cuda-graph-capture-safe** — so no Triton fallback port needed (unlike other recipes). Lifted the whole curve: **33 → 47 typ, 55 → 70.2 peak.** ⚠️ *2026-08-28: capture-safe, but the kernel itself is now known to corrupt past ~120K context on SM121 (#36806) — see the update section; the staged Triton-varlen image replaces it.*
 4. **🧠 PLE offload:** `--ple-offload-embedding`. KV 534K → 686K, decode unchanged.
 5. **🛡️ Agent-safety hardening:** a day-0 SGLang bug ([#36537](https://github.com/sgl-project/sglang/issues/36537) + the cuda-graph × speculative-decode class in [#17330](https://github.com/sgl-project/sglang/issues/17330) / [#29548](https://github.com/sgl-project/sglang/issues/29548) / prefix-hit [#19796](https://github.com/sgl-project/sglang/issues/19796)) can emit a **token-0 (`!`) loop** in long tool-carrying sessions. Fix stack, all zero-decode-cost:
    - `--default-chat-template-kwargs '{"enable_thinking": false}'` (thinking off)
@@ -96,7 +97,9 @@ MTP weights add ~1.9GB (load ~56s). CUDA-graph capture costs ~0.4GB.
 | Recipe | Engine | CUDA graphs | Peak tok/s | KV pool | Agent-safe |
 |---|---|---|---:|---:|:---:|
 | [MiaAI-Lab dual-Spark](https://github.com/MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks) | SGLang + Triton QSA fallback | on | ~64–67 | ~956K | not documented |
-| **This repo** | SGLang + FlashInfer TRT-LLM path | **on** | **70.2** ✅ | **1,049,344** ✅ | ✅ (temp ≤0.7) |
+| **This repo** | SGLang + FlashInfer TRT-LLM path | **on** | **70.2** ✅ | **1,049,344** ✅ | ✅ (temp ≤0.7) **but ≤~120K ctx only** ⚠️ |
+
+⚠️ *2026-08-28: MiaAI-Lab's Triton-fallback route turned out to be the correct call for long context — the TRT-LLM path corrupts past ~120K on SM121 (#36806). Credit where due. Our staged `Dockerfile.qwen38fn-sm121-triton-varlen` adopts the same upstream kernel (#36845) while keeping this repo's mamba-pool, mrope-vision, and agent-safety fixes that no other recipe carries.*
 
 Top speed on our **own** kernel path, the **bigger KV pool**, **and** the day-0 agent-safety fixes the raw-speed recipes skip — plus a companion **3090 GGUF lane** for non-Blackwell hardware ([fleet repo](https://github.com/tonyd2wild/Qwen3.8-Flash-Next-Fleet-Deploy)).
 
@@ -179,3 +182,20 @@ image `radixark/sglang-qwen38flashnext:sm121-qsa-mrope1` (build recipe:
 Full incident timeline and receipts: `INCIDENT-2026-08-27-mrope-and-mamba.md`.
 The launcher in this repo is the verified stable config (vision on, mamba pool
 pinned, thinking off, temp <= 0.7, auto-restart).
+
+## Update 2026-08-28 — upstream verdict on the `!!!!` loop: the TRT-LLM kernel was corrupting long context all along
+
+The complete token-0 (`!`) taxonomy, final form — four distinct bugs, one symptom (garbage logits → argmax → token 0):
+
+| # | Cause | Trigger | Fix | Status here |
+|---|---|---|---|---|
+| 1 | **TRT-LLM sparse decode corrupts long context on SM121** ([#36806](https://github.com/sgl-project/sglang/pull/36806), merged) | probabilistic from ~120K ctx, certain by ~210K | never TRT-LLM on SM121; Triton packed-varlen kernel ([#36845](https://github.com/sgl-project/sglang/pull/36845)) | **STAGED, untested**: `Dockerfile.qwen38fn-sm121-triton-varlen` + bundled `pr36845.diff` (reference kernel also in [`community-fix/`](./community-fix/)) |
+| 2 | mamba/SSM pool collapse under `--disable-radix-cache` | 6+ concurrent agents | `--max-mamba-cache-size 97` | ✅ deployed + verified |
+| 3 | thinking + tools + qwen3_coder parser ([#36537](https://github.com/sgl-project/sglang/issues/36537)) | tool sessions with thinking on | thinking off server-side, temp ≤ 0.7, no `reasoning_effort` | ✅ deployed + verified |
+| 4 | mrope partial-rotary OOB (vision CUDA assert, Xid 43) | image requests under CUDA graphs | Triton `t_mask` bound (`MROPE-ANALYSIS.md`) | ✅ deployed (soaking) |
+
+Honest revision: our first long-session wedge (documented in `INCIDENT-2026-08-27-mrope-and-mamba.md` as cause 3) died at 95–105K context — squarely on #36806's corruption curve. It was most likely cause **1**, or 1 and 3 together. The upstream evidence (1/4 corrupt runs at 120K → 4/4 at 210K, short requests 50/50 clean) explains why every short smoke test passed while real agent sessions died.
+
+**Deployment status:** the live image is still the TRT-LLM path (`sm121-qsa-mrope1`) — fast and verified clean at short/medium context, unsafe past ~120K. The staged Triton-varlen image is the successor; before promoting it: `docker build` must pass its apply-check, then a >120K-token long-context soak (short smokes cannot catch cause 1) plus `load_test_qwen.py` (cause 2) plus a vision probe (cause 4). Keep the launcher's `--max-mamba-cache-size 97` and thinking-off default — the new image changes kernels, not those bugs.
+
+Upstream watch: [#36845](https://github.com/sgl-project/sglang/pull/36845) merging + the first refreshed `qwen38flashnext` image tag ends the patched-image era entirely ([#36497](https://github.com/sgl-project/sglang/pull/36497) still open as of 08-28, now carrying an SM121 long-context advisory).

@@ -365,6 +365,14 @@ class Qwen4ExpMultiTokenPredictor(nn.Module):
         return loader.load_weights(weights, mapper=mapper)
 
 
+def _draft_vocab_size() -> int:
+    import os as _os
+    try:
+        return int(_os.environ.get("QWEN4EXP_DRAFT_VOCAB", "0"))
+    except ValueError:
+        return 0
+
+
 @support_torch_compile(
     dynamic_arg_dims={
         "input_ids": 0,
@@ -374,14 +382,6 @@ class Qwen4ExpMultiTokenPredictor(nn.Module):
         "hidden_states": 0,
     }
 )
-def _draft_vocab_size() -> int:
-    import os as _os
-    try:
-        return int(_os.environ.get("QWEN4EXP_DRAFT_VOCAB", "0"))
-    except ValueError:
-        return 0
-
-
 class Qwen4ExpMTP(nn.Module, SupportsPP, Qwen4ExpMixtureOfExperts):
     packed_modules_mapping = {
         "qkv_proj": ["q_proj", "k_proj", "v_proj"],

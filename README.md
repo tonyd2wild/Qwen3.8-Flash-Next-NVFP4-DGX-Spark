@@ -59,6 +59,15 @@ MTP4 acceptance: 64% overall, 3.56 tokens accepted per step on average. Eager fl
 | 176K tokens | 106 s | 1,660 tok/s |
 | 200K tokens | 104 s | ~1,900 tok/s |
 
+### Decode latency tail (streaming, prose replies of ~250 words, `tools/itl_probe.py`)
+
+| Streams | TTFT | Step latency p50 / p90 / p99 | Tokens per step | Per-token latency p50 / p99 | Per stream | Aggregate (prose) |
+|---|---|---|---|---|---|---|
+| 1 | 260 ms | 105 / 113 / 121 ms | 2.16 | 49 / 56 ms | 20.6 tok/s | 20.6 tok/s |
+| 6 | 569 ms | 186 / 194 / 203 ms | 2.16 | 86 / 94 ms | 11.6 tok/s | 70.0 tok/s |
+
+One SSE chunk is one MTP step. p99 sits within 10% of p50 at six streams: the on-demand table reads never show up as a tail.
+
 ### KV pool by gpu-memory-utilization (262K context, same weights in every row)
 
 | gmu | KV dtype | MTP | KV pool (tokens) | MemAvailable after boot | Note |

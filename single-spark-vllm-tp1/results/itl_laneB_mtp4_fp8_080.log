@@ -1,0 +1,10 @@
+concurrency 1 | streams 1 | tokens 142 | TTFT med 255 ms | per-stream decode med 9.6 tok/s | aggregate ~9.6 tok/s
+inter-token latency: p50 105 ms | p90 111 ms | p99 118 ms | max 118 ms
+concurrency 6 | streams 6 | tokens 832 | TTFT med 1687 ms | per-stream decode med 5.3 tok/s | aggregate ~31.8 tok/s
+inter-token latency: p50 186 ms | p90 195 ms | p99 206 ms | max 1414 ms
+concurrency 1 | streams 1 | tokens 139 | TTFT med 260 ms | per-stream decode med 9.6 tok/s | aggregate ~9.6 tok/s
+decode STEP latency (one SSE chunk = one MTP step, 2.16 tokens per step on average): p50 105 ms | p90 113 ms | p99 121 ms | max 123 ms
+effective per-token latency (step / tokens-per-step): p50 49 ms | p99 56 ms | per-stream tokens/s med ~20.6 | aggregate ~20.6
+concurrency 6 | streams 6 | tokens 833 | TTFT med 569 ms | per-stream decode med 5.4 tok/s | aggregate ~32.4 tok/s
+decode STEP latency (one SSE chunk = one MTP step, 2.16 tokens per step on average): p50 186 ms | p90 194 ms | p99 203 ms | max 209 ms
+effective per-token latency (step / tokens-per-step): p50 86 ms | p99 94 ms | per-stream tokens/s med ~11.6 | aggregate ~70.0

@@ -6,7 +6,7 @@
 # Usage: qwen38fn-nvidia-tp2.sh <0|1>   (run rank 1 = worker FIRST, then rank 0 = head)
 # Env knobs: IMAGE, PLE_MODE (mmap = table on disk [CONTEXT] | resident = our patch keeps each rank's slice in memory [SPEED] | none = stock loader, needs GRAPHS=nocompile),
 #   GRAPHS (eager|piecewise|full|nocompile|default), LANE (B = Reddie head + Spark4 [default] | A = Bluey head + Asusi), KV_DTYPE, OVERLAYS,
-#   PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, MPORT, TOOL_PARSER (qwen3_xml|qwen3_coder), EXTRA
+#   PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, MPORT, TOOL_PARSER (qwen3_xml|qwen3_coder), NCCL_CHANNELS (e.g. 8; TJ Klug's 2-Spark recipe pins 8), EXTRA
 set -euo pipefail
 NODE_RANK="${1:?usage: qwen38fn-nvidia-tp2.sh <0|1>}"
 IMAGE="${IMAGE:-vllm/vllm-openai:nightly-8a728663c1c3eeace834a95f5654fa653cc1998c}"
@@ -91,6 +91,7 @@ docker run --gpus all -d --name "$NAME" --restart no \
   -e NCCL_SOCKET_IFNAME=enp1s0f0np0 -e GLOO_SOCKET_IFNAME=enp1s0f0np0 -e TP_SOCKET_IFNAME=enp1s0f0np0 -e MN_IF_NAME=enp1s0f0np0 \
   -e NCCL_NVLS_ENABLE=0 -e NCCL_CROSS_NIC=0 -e NCCL_IB_MERGE_NICS=0 -e NCCL_CUMEM_ENABLE=0 \
   -e NCCL_IGNORE_CPU_AFFINITY=1 -e NCCL_DEBUG=WARN -e TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
+  ${NCCL_CHANNELS:+-e NCCL_MAX_NCHANNELS=$NCCL_CHANNELS -e NCCL_MIN_NCHANNELS=$NCCL_CHANNELS} \
   "${PLE_ENV[@]}" "${PLE_MOUNT[@]}" "${DRAFT_ENV[@]}" "${DRAFT_MOUNT[@]}" "${OVERLAY_MOUNT[@]}" "${GRAPH_MOUNT[@]}" ${DOCKER_EXTRA:-} \
   "$IMAGE" \
     /models/qwen38fn --served-model-name qwen3.8-flash-next \

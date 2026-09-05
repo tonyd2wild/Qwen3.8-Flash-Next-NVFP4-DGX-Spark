@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Single-Spark round 2 (eager): Spark4 = MTP3 seqs 4 chunk 4096; Reddie = same + DRAFT_VOCAB=65536 (our reduced-vocab draft)
+cd ~/.openclaw/workspace/qwen38fn-tp1-single-spark
+until grep -q "TP1 EAGER RECIPE HARNESS DONE" results/bench_tp1_eager_recipe_080.log 2>/dev/null && grep -q "TP1 EAGER MTP4 HARNESS DONE" results/bench_tp1_eager_chunk_mtp4_080.log 2>/dev/null; do sleep 15; done
+echo "ROUND1 DONE, round 2 $(date +%H:%M:%S)"
+ssh -i ~/.ssh/id_ed25519_spark -o IdentitiesOnly=yes -o ConnectTimeout=20 tonyspark3@100.90.25.78 'J="ssh -i ~/.ssh/id_ed25519_shared -o ConnectTimeout=25 -o StrictHostKeyChecking=no"; $J tonyspark4@192.168.192.4 "docker rm -f vllm_qwen38fn >/dev/null 2>&1; sync; echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null 2>&1; PLE_MODE=mmap GRAPHS=eager GMU=0.80 MTP=3 SEQS=4 CHUNK=4096 ~/qwen38fn-nvidia-tp1.sh 2>&1 | tail -1"; $J tonyspark2@10.0.0.9 "docker rm -f vllm_qwen38fn >/dev/null 2>&1; sync; echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null 2>&1; PLE_MODE=mmap GRAPHS=eager GMU=0.80 MTP=3 SEQS=4 CHUNK=4096 DRAFT_VOCAB=65536 ~/qwen38fn-nvidia-tp1.sh 2>&1 | tail -1"' 2>&1 | grep -v "^Warning"
+echo "RELAUNCHED ROUND2 (spark4 eager MTP3 s4, reddie same + DRAFT_VOCAB 64k) $(date +%H:%M:%S)"; sleep 120
+( until curl -s -m 5 -o /dev/null -w "%{http_code}" http://100.121.11.91:8000/v1/models 2>/dev/null | grep -q 200; do sleep 5; done; echo "SPARK4 ENDPOINT UP $(date +%H:%M:%S)"; sleep 10; tools/bench_lane.sh http://100.121.11.91:8000 qwen3.8-flash-next qwen38fn_tp1_eager_mtp3_s4_080 > results/bench_tp1_eager_mtp3_s4_080.log 2>&1; echo "TP1 R2 S4 HARNESS DONE $(date +%H:%M:%S)" ) &
+( until curl -s -m 5 -o /dev/null -w "%{http_code}" http://100.113.138.96:8000/v1/models 2>/dev/null | grep -q 200; do sleep 5; done; echo "REDDIE ENDPOINT UP $(date +%H:%M:%S)"; sleep 10; tools/bench_lane.sh http://100.113.138.96:8000 qwen3.8-flash-next qwen38fn_tp1_eager_mtp3_s4_dv64k_080 > results/bench_tp1_eager_mtp3_s4_dv64k_080.log 2>&1; echo "TP1 R2 DV64K HARNESS DONE $(date +%H:%M:%S)" ) &
+wait; echo "TP1 ROUND2 ALL DONE $(date +%H:%M:%S)"

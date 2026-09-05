@@ -81,11 +81,31 @@ One SSE chunk is one MTP step. p99 sits within 10% of p50 at six streams: the on
 
 The MTP head costs roughly 290K tokens of pool at the same gmu. Pick your own headroom; around 10 GB available is where single-Spark runs start to swap.
 
+## Four Sparks (TP4 + expert parallel), same stack
+
+Same flags again, split four ways (`single-spark-vllm-tp1/launch/qwen38fn-nvidia-tp4.sh <rank>` plus `EXTRA=--enable-expert-parallel`, which TP4 needs on GB10; see the credits). One rank reads its checkpoint slice over NFS, the numbers include it.
+
+![one Spark vs TP2 vs TP4](single-spark-vllm-tp1/results/chart_qwen38fn_tp1_vs_tp2_vs_tp4.png)
+
+| | 1 Spark | TP2 | TP4 | TP4 vs 1 Spark |
+|---|---|---|---|---|
+| KV pool (tokens) | 995,129 | 5,874,061 | 9,088,133 | 9.1x |
+| Single stream, median of 40 prompts | 32.5 | 35.8 | 40.5 tok/s | +25% |
+| Single stream, prose | 21.7 | 24.1 | 26.4 tok/s | +22% |
+| TTFT single stream | 300 | 250 | 220 ms | -27% |
+| x4 per stream / aggregate | 23.0 / 42.0 | 27.8 / 43.1 | 32.1 / 51.1 | +40% / +22% |
+| x6 per stream / aggregate | 19.2 / 62.5 | 22.3 / 65.5 | 28.5 / 87.4 | +49% / +40% |
+| x6 TTFT | 690 | 410 | 370 ms | -46% |
+| Prefill 28K / 113K / 176K | 1,654 / 1,643 / 1,660 | 2,093 / 2,061 / 2,038 | 2,453 / 2,299 / 2,233 | +48% / +40% / +35% |
+
+Full tables, boot notes and raw JSON in `single-spark-vllm-tp1/README.md`. One Spark remains the default; the multi-Spark lanes are there for people who own more than one.
+
 ## What is in the patch, and credits
 
 - `ple_mmap.py` (new file) and the hooks in `ple_layer.py` (the nightly file plus our hooks, `patch/ple_layer.diff`), plus one line in `compilation.py`: ours. Disk-backed PLE table (positional reads on a thread pool, byte-exact against the checkpoint), 1-row placeholder weight, shard drop at load, a custom op so the gather is a CUDA-graph split point.
 - `modelopt.py` overlay: ours, written 2026-09-05. Two fixes so NVIDIA's MTP head loads (draft-local layer index in the quant config; a branch for 128x128 block-scaled FP8 experts). The same two gaps were fixed independently the same day by sfxnz (`sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark`, MIT, commit 13:51 UTC, about two hours before ours) and by MiaAI-Lab (`Qwen3.8-Flash-Next-Dual-DGX-Sparks`, AGPL-3.0, commit 16:07 UTC); no code is shared between the three. Upstream issue draft in `single-spark-vllm-tp1/research/`.
 - Credited upstream overlays, unmodified: vLLM PR #55375 (peakcrosser7, MTP conv-state stride fix) and PR #54846 (andreasgru, FP8 KV on the QSA attention path). Leaving the table on disk as an idea is shared with vLLM PR #54129 (Trosfy) and other single-Spark runs; the implementation here is independent. The piecewise-CUDA-graph mode with the PLE lookup registered as a splitting op is the same mode blazux's single-Spark recipe ships (`blazux/qwen3.8-Flash-DGX`, Apache-2.0); Trosfy's early #54129 revision also went through a custom op. Launcher settings taken from community findings: `VLLM_USE_DEEP_GEMM=0` (vLLM issue #54125, jschmied), prefix caching off (vLLM issue #54173, brainatworkharris), `--no-enable-flashinfer-autotune` (jschmied's FlashInfer autotune-cache reports). FP8 KV: PR #54846 (andreasgru) and RFC #54426 (Nanetnounou). The ~10 GB free-memory floor comes from MiaAI-Lab's single-Spark README and blazux's swap/OOM reports. Full prior-art notes, the credit map and the credits audit are in `single-spark-vllm-tp1/research/`. Licensing: Apache-2.0 (`LICENSE`, `NOTICE`); the reference kernel under `lanes/sglang-tp2/community-fix/` is MiaAI-Lab's and AGPL-3.0-or-later.
+- TP4 needs `--enable-expert-parallel`: FlashInfer CUTLASS NVFP4 cannot pad the MoE intermediate size four ways (it splits two ways fine). **tsw2000** reported that wall and the expert-parallel way around it on the vLLM tracker before we hit it; the finding is theirs, we only confirmed it on our four boxes.
 
 Details, diffs, launcher knobs, the harness and every raw result: [`single-spark-vllm-tp1/README.md`](single-spark-vllm-tp1/README.md).
 

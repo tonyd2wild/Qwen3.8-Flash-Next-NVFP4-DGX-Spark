@@ -17,4 +17,4 @@ Stress: 200K-token prefill at row 4 (0.78, FP8 KV): needle answered correctly, T
 Stress at row 6 (0.82, FP8 KV): 176,134-token prompt, needle correct, TTFT 106.1 s (1,660 tok/s prefill), no driver errors.
 | 9 | Reddie | 0.80 | 262,144 | fp8_e4m3 | piecewise | 3 | 881,757 | ~14.7 | | | MTP3 twin for the A/B; smaller than Spark4's 995K at the same setting because Reddie carries the NFS server and more resident processes (node effect, not MTP3) |
 | 10 | Reddie+Spark4 TP2 | 0.80 | 262,144 | fp8_e4m3 | piecewise | 4 | 5,874,061 | 52.15 | 22.41x @262K | 111 / 10 (head) | TP2 over the RoCE fabric, same stack; weights load 321 s; MemAvailable on the head ~10.5 GB, so 0.75 would be the comfortable TP2 setting |
-
+| 11 | Reddie+Spark4+Asusi+Bluey TP4 + EP | 0.80 | 262,144 | fp8_e4m3 | piecewise | 4 | 9,088,133 | 72.24 | 34.67x @262K | 23.1 weights+non-torch / 72.2 KV per rank | TP4 needs `--enable-expert-parallel` (FlashInfer CUTLASS NVFP4 cannot pad the MoE intermediate size four ways; prior art tsw2000); Asusi reads its slice over NFS; weights 218 s + 65 s, init 135 s |

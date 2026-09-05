@@ -181,3 +181,58 @@ Footnote, never a headline: the synthetic counting-to-100 ceiling at x6 is 194 t
 
 Raw: `results/categories_qwen38fn_tp2_mtp4_fp8_080_off_c{1,2,4,6}.json`, `results/prefill_qwen38fn_tp2_mtp4_fp8_080.txt`, `results/sweep_qwen38fn_tp2_mtp4_fp8_080.json`, `results/stress_tp2_080_200k.log`, `results/bench_tp2_mtp4_fp8_080.log`. Chart: `tools/make_tp2_charts.py`; comparison: `tools/compare_lanes.py`.
 
+
+
+## Four Sparks (TP4 + expert parallel), same stack
+
+`launch/qwen38fn-nvidia-tp4.sh <rank>` on all four boxes (workers first: 3 Bluey, 2 Asusi, 1 Spark4, then head 0 Reddie), same flags as the single-Spark default (MTP4, FP8 KV, piecewise CUDA graphs, gmu 0.80, 262K) plus `EXTRA=--enable-expert-parallel`.
+
+Why expert parallel: the first TP4 boot loaded weights and then stopped with `NotImplementedError: Intermediate size padding for w1 and w3, for FLASHINFER_CUTLASS NvFp4 backend`. The MoE intermediate size does not split four ways for the FlashInfer CUTLASS NVFP4 kernel (it does split two ways, which is why TP2 needs nothing extra). With expert parallel each rank owns whole experts instead of a slice of every expert, so nothing needs padding. tsw2000 reported the same wall and the same way around it on the vLLM tracker before we hit it; that finding is theirs.
+
+Asusi reads its checkpoint slice over an NFS mount of Reddie's copy (`MODEL_HOST=/mnt/reddie-models/...`); the other three ranks read local NVMe. The disk-backed PLE table works either way: the numbers below include the NFS rank.
+
+Boot: weights 218 s + 65 s (MTP draft), engine init 135 s. Per rank: 23.1 GiB weights and non-torch, 72.2 GiB KV. **KV pool 9,088,133 tokens (34.7 full 262K contexts)** vs 5,874,061 at TP2 and 995,129 on one Spark.
+
+Single stream (x1), per category, tok/s:
+
+| Category | 1 Spark | TP2 | TP4 | TP4 vs 1 Spark |
+|---|---|---|---|---|
+| Prose | 21.7 | 24.1 | 26.4 | +22% |
+| Coding | 34.4 | 37.3 | 44.5 | +29% |
+| Math / logic | 36.0 | 38.9 | 47.2 | +31% |
+| JSON | 43.7 | 38.2 | 47.8 | +9% |
+| HTML | 42.4 | 45.1 | 50.7 | +20% |
+| Narrative | 18.7 | 21.8 | 25.8 | +38% |
+| Summary | 21.2 | 26.0 | 27.3 | +29% |
+| Format | 22.2 | 25.4 | 26.8 | +21% |
+| Median of all 40 | 32.5 | 35.8 | 40.5 | +25% |
+
+TTFT single stream: 300 / 250 / 220 ms. Quality score identical (0.84).
+
+Concurrent load (1 Spark / TP2 / TP4; change = TP4 vs 1 Spark):
+
+| Load | TTFT | Per stream (all prompts) | Prose per stream | Aggregate |
+|---|---|---|---|---|
+| x1 | 300 / 250 / 220 ms (-27%) | 32.5 / 35.8 / 40.5 (+25%) | 21.7 / 24.1 / 26.4 | 32.5 / 35.8 / 40.5 (+25%) |
+| x2 | 350 / 290 / 250 ms (-29%) | 31.0 / 32.1 / 33.4 (+8%) | 18.3 / 19.5 / 23.9 | 38.8 / 40.6 / 47.1 (+21%) |
+| x4 | 440 / 340 / 310 ms (-30%) | 23.0 / 27.8 / 32.1 (+40%) | 19.7 / 20.0 / 24.3 | 42.0 / 43.1 / 51.1 (+22%) |
+| x6 | 690 / 410 / 370 ms (-46%) | 19.2 / 22.3 / 28.5 (+49%) | 14.7 / 16.1 / 21.5 | 62.5 / 65.5 / 87.4 (+40%) |
+
+Quality scores identical across the three shapes. TP4 is where aggregate finally moves: +40% at six streams, with every stream still running faster than a single stream did on one Spark.
+
+Cold prefill ladder (1 Spark / TP2 / TP4, tok/s, needle answered correctly at every rung):
+
+| Prompt | 1 Spark | TP2 | TP4 | TP4 vs 1 Spark |
+|---|---|---|---|---|
+| 7K | 1,206 | 1,433 | 1,378 | +14% |
+| 28K | 1,654 | 2,093 | 2,453 | +48% |
+| 113K | 1,643 | 2,061 | 2,299 | +40% |
+| 176K (200K stress) | 1,660 | 2,038 | 2,233 | +35% |
+
+TTFT on the 176K prompt: 106 s / 86 s / 79 s. No hang at 113K or 176K with expert parallel on this nightly (a long-prefill hang above ~75K at TP4+EP was reported on an earlier build by tsw2k; not reproduced here).
+
+Footnote, never a headline: the synthetic counting-to-100 ceiling at x6 is 194 / 234 / 262 tok/s aggregate.
+
+![one Spark vs TP2 vs TP4](results/chart_qwen38fn_tp1_vs_tp2_vs_tp4.png)
+
+Raw: `results/categories_qwen38fn_tp4_mtp4_fp8_080_ep_off_c{1,2,4,6}.json`, `results/prefill_qwen38fn_tp4_mtp4_fp8_080_ep.txt`, `results/sweep_qwen38fn_tp4_mtp4_fp8_080_ep.json`, `results/stress_tp4_080_200k.log`, `results/bench_tp4_mtp4_fp8_080_ep.log`. Chart: `tools/make_scaling_charts.py`.

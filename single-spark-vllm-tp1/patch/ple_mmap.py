@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tony DeAngelo (Tech2Wild / 2Wild); written by Kai
 # Kai / 2Wild, 2026-09-05. Disk-backed (mmap) n-gram PLE table for Qwen3.8-Flash-Next
 # (NVIDIA ModelOpt checkpoint) so the 47.7 GiB FP8 table never has to be resident.
 # Own implementation, written for the single-DGX-Spark (GB10, 128 GB unified) case.
@@ -56,7 +57,6 @@ class PLEMmapTable:
         self.chunk_rows = int(os.environ.get("QWEN4EXP_PLE_MMAP_CHUNK", "8"))
         self._pool = ThreadPoolExecutor(max_workers=self.threads, thread_name_prefix="ple-mmap")
         self._lock = threading.Lock()
-        self._files: dict[str, tuple[mmap.mmap, int]] = {}
         # shard_index -> (path, data_begin_abs, rows, row_bytes, dtype)
         shards: dict[int, tuple[str, int, int, int, str]] = {}
         pat = re.compile(

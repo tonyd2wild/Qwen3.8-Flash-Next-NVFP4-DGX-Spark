@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Copyright (c) MiaAI-Lab (Qwen3.8-Flash-Next-Dual-DGX-Sparks). Reference kernel extracted from their start.sh;
+# ports sgl-project/sglang PRs #36806 and #36845 by BBuf (Apache-2.0). Not used by any served stack in this repo.
 """Packed varlen attention fallback for QSA decode on SM121.
 
 Port of sgl-project/sglang#36845 (`qsa/sm121_varlen.py`). The QSA backend

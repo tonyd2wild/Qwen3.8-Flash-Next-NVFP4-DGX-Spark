@@ -19,7 +19,7 @@ Serving on `:8000`, **MTP4 speculative decode + CUDA graphs both ON**, warmed:
 | 🖼️ **Vision / image input** | **ON** (full multimodal) |
 | 🛡️ OOM | **fixed** (KV pinned, ~23GB free) |
 
-That's up to **3.5× over the no-MTP baseline**, and it **matches/beats the fastest published dual-Spark recipe** (MiaAI-Lab, ~64–67 tok/s single-stream) on our own kernel path with no borrowed code — with **full vision kept on** and the **OOM crash fixed** (KV pinned). One residual day-0 edge remains (a rare multimodal-rope assert under cuda graphs); it is handled *without* sacrificing vision — see the [Stability section](#️-stability-notes-oom-fixed-vision-kept-one-residual-day-0-risk). KV is pinned at 600K for OOM safety; the 1.05M pool is reachable at mem 0.82 with no pin but OOMs under load, so the pin is the production default.
+That's up to **3.5× over the no-MTP baseline**, and it **matches/beats the fastest published dual-Spark recipe** (MiaAI-Lab, ~64–67 tok/s single-stream) on our own kernel path with no borrowed code in the served stack (the untested reference kernel under `community-fix/` is MiaAI-Lab's, AGPL) — with **full vision kept on** and the **OOM crash fixed** (KV pinned). One residual day-0 edge remains (a rare multimodal-rope assert under cuda graphs); it is handled *without* sacrificing vision — see the [Stability section](#️-stability-notes-oom-fixed-vision-kept-one-residual-day-0-risk). KV is pinned at 600K for OOM safety; the 1.05M pool is reachable at mem 0.82 with no pin but OOMs under load, so the pin is the production default.
 
 ---
 

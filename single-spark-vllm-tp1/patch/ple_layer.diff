@@ -1,5 +1,5 @@
 --- a/vllm/models/qwen4_exp/nvidia/ple_layer.py	2026-09-04 01:33:54
-+++ b/vllm/models/qwen4_exp/nvidia/ple_layer.py	2026-09-05 11:23:24
++++ b/vllm/models/qwen4_exp/nvidia/ple_layer.py	2026-09-05 12:42:44
 @@ -48,7 +48,18 @@
  from ..common.ple import PLEVocabParallelEmbedding
  from .ops.ple import ple_conv, ple_gate, ple_ngram_ids
@@ -35,14 +35,14 @@
          )
          layer.register_parameter("weight", weight)
  
-@@ -459,8 +476,49 @@
+@@ -459,8 +476,53 @@
              ngram_ids,
              self.layer_name,
          )
 +        if getattr(self.ngram_embedding, "_ple_mmap", False):
 +            return self._ple_mmap_lookup(ngram_ids)
          return self.ngram_embedding(ngram_ids).flatten(-2)
- 
++
 +    # --- Kai/2Wild: disk-backed lookup path -------------------------------
 +    def _ple_mmap_table(self) -> PLEMmapTable:
 +        table = getattr(self, "_ple_table", None)
@@ -63,19 +63,23 @@
 +                    f"{self.ngram_embedding.org_vocab_size}"
 +                )
 +            self._ple_table = table
-+            self._ple_gpu_buf = None
++            self._ple_row_bytes = int(table.row_bytes)
++            self._ple_dtype = table.dtype
 +        return table
-+
+ 
 +    def _ple_mmap_lookup(self, ngram_ids: torch.Tensor) -> torch.Tensor:
-+        table = self._ple_mmap_table()
-+        # Graph-owned output storage (same pattern as the ngram-id op): the custom
-+        # op below is a registered splitting op, so under PIECEWISE cudagraphs the
-+        # host gather runs eagerly between captured pieces.
++        # Traced by torch.compile: only tensor ops + constant attribute reads here.
++        # The table object is built eagerly in load_weights (thread pool + fds
++        # cannot be constructed under Dynamo tracing); the custom op body below
++        # is opaque to the tracer and does the host-side work.
++        row_bytes = self._ple_row_bytes
 +        out = torch.empty(
-+            (ngram_ids.numel(), table.row_bytes), dtype=torch.uint8, device=ngram_ids.device
++            (ngram_ids.numel(), row_bytes), dtype=torch.uint8, device=ngram_ids.device
 +        )
 +        torch.ops.vllm.qwen4_exp_ple_mmap_gather(ngram_ids, out, self.layer_name)
-+        return out.view(table.dtype).view(ngram_ids.shape[0], self.ngram_heads * self.head_dim)
++        return out.view(self._ple_dtype).view(
++            ngram_ids.shape[0], self.ngram_heads * self.head_dim
++        )
 +
 +    def _ple_mmap_gather_into(self, ngram_ids: torch.Tensor, out: torch.Tensor) -> None:
 +        table = self._ple_mmap_table()
@@ -85,7 +89,7 @@
      def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
          """Load hash buffers and checkpoint-split embedding rows."""
  
-@@ -508,6 +566,16 @@
+@@ -508,6 +570,16 @@
                      min(shard_size, embedding.org_vocab_size - checkpoint_start),
                  )
                  expected_shape = (expected_rows, embedding.embedding_dim)
@@ -102,7 +106,16 @@
                  if tuple(loaded_weight.shape) != expected_shape:
                      raise ValueError(
                          f"Shape mismatch for PLE embedding shard {shard_index}: "
-@@ -567,6 +635,9 @@
+@@ -525,6 +597,8 @@
+ 
+         if regular_weights:
+             loaded.update(AutoWeightsLoader(self).load_weights(regular_weights))
++        if getattr(self.ngram_embedding, "_ple_mmap", False):
++            self._ple_mmap_table()  # eager construction: fds + thread pool, outside any tracing
+         return loaded
+ 
+ 
+@@ -567,6 +641,9 @@
              quant_config=quant_config,
              params_dtype=model_config.dtype,
          )
@@ -112,10 +125,12 @@
          # The PLE cache is TP-replicated, so this merged projection is too.
          self.kv_proj = MergedColumnParallelLinear(
              int(config.ple_embed_dim),
-@@ -904,7 +975,29 @@
+@@ -902,9 +979,31 @@
+     layer_name: str,
+ ) -> None:
      return
- 
- 
++
++
 +
 +# --- Kai/2Wild: disk-backed PLE gather as a splitting custom op -------------
 +def _qwen4_exp_ple_mmap_gather(
@@ -123,8 +138,8 @@
 +) -> None:
 +    layer = get_forward_context().no_compile_layers[layer_name]
 +    layer.ple_embedding._ple_mmap_gather_into(ngram_ids, out)
-+
-+
+ 
+ 
 +def _qwen4_exp_ple_mmap_gather_fake(
 +    ngram_ids: torch.Tensor, out: torch.Tensor, layer_name: str
 +) -> None:

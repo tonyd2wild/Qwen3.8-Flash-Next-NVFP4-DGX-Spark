@@ -1,0 +1,15 @@
+Qwen3.8-Flash-Next-NVFP4-DGX-Spark
+Copyright 2026 Tony DeAngelo (Tech2Wild / 2Wild). Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This repository redistributes, with modifications, files from vLLM (https://github.com/vllm-project/vllm),
+Copyright contributors to the vLLM project, Apache-2.0:
+  single-spark-vllm-tp1/patch/ple_layer.py, single-spark-vllm-tp1/patch/compilation.py,
+  single-spark-vllm-tp1/patch/upstream-overlays/*.py and the .diff files beside them
+  (see single-spark-vllm-tp1/patch/upstream-overlays/PROVENANCE.md for the exact base commit and changes).
+
+It bundles, unchanged, the diff of sgl-project/sglang pull request #36845 by BBuf (Apache-2.0)
+as lanes/sglang-tp2/pr36845.diff.
+
+lanes/sglang-tp2/community-fix/sm121_varlen.py is a reference kernel extracted from
+MiaAI-Lab/Qwen3.8-Flash-Next-Dual-DGX-Sparks (AGPL-3.0-or-later); it is not part of the served stacks
+and is licensed separately under lanes/sglang-tp2/community-fix/LICENSE.

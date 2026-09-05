@@ -1,6 +1,6 @@
 # Qwen3.8-Flash-Next NVFP4 on ONE DGX Spark, vLLM, TP1
 
-NVIDIA's own checkpoint, `nvidia/Qwen3.8-Flash-Next-NVFP4` (124 GB on disk, 125B-A6B hybrid MoE + 51B n-gram table + 4B MTP), served from a single DGX Spark (GB10, 128 GB unified memory) with upstream vLLM main and a two-file patch written for this lane. No requantizing, no repacking: the checkpoint is used byte for byte.
+NVIDIA's own checkpoint, `nvidia/Qwen3.8-Flash-Next-NVFP4` (124 GB on disk, 125B-A6B hybrid MoE + 51B n-gram table + 4B MTP), served from a single DGX Spark (GB10, 128 GB unified memory) with upstream vLLM main and a three-file patch (`ple_mmap.py`, hooks in `ple_layer.py`, one line in `compilation.py`) plus a two-fix `modelopt.py` overlay, all written for this lane. No requantizing, no repacking: the checkpoint is used byte for byte.
 
 Status: serving as of 2026-09-05. Numbers below are from the harness in `tools/`, cold prefill only, real prompts only; the count-to-100 ceiling is reported once at the bottom and never as a headline.
 
@@ -24,7 +24,7 @@ Upstream vLLM main (nightly `8a728663`, 2026-09-04) has the NVIDIA-checkpoint lo
 `patch/ple_layer.py` (nightly file + hooks, see `patch/ple_layer.diff`)
 - Allocates a 1-row placeholder instead of the 47.68 GiB table at construction.
 - Validates and drops the shard tensors at load time (they would otherwise hit the loader's TP-range copy).
-- Looks rows up through a registered custom op (`vllm::qwen4_exp_ple_mmap_gather`) so torch.compile treats the host gather as opaque and, with `patch/compilation.py` (one line added to `_attention_ops`), as a piecewise CUDA-graph split point.
+- Looks rows up through a registered custom op (`vllm::qwen4_exp_ple_mmap_gather`) so torch.compile treats the host gather as opaque and, with `patch/compilation.py` (one line added to `_attention_ops`), as a piecewise CUDA-graph split point. This is the same graph mode blazux's recipe uses (its `vllm_ple_mmap.py` runs as an opaque splitting op under PIECEWISE) and Trosfy's early #54129 revision; here it comes from vLLM's own `_attention_ops` list, which already carries `qwen4_exp_compute_ple_ngram_ids`.
 - Builds the reader once at weight-load time; the traced forward touches only tensors and constants (Dynamo cannot construct thread pools).
 
 Measured reader cost on Reddie (CPU-only container, cold = after `drop_caches`, byte-exact against raw reads): 8K-token prefill (131,072 rows) 1.0 s cold, 0.64 s warm; 64-token decode batch 23 ms cold, 8 ms warm; single token ~0 ms warm.
@@ -40,7 +40,7 @@ Both are upstream vLLM contributions by their authors; nothing else in this lane
 `patch/upstream-overlays/modelopt.py` is different: it is the nightly's file plus **two fixes of ours** for loading NVIDIA's MTP head (see `patch/modelopt_mtp_index.diff`):
 - NVIDIA's `hf_quant_config.json` keys the MTP experts as `mtp.layers.0.mlp.experts` while vLLM (and the checkpoint's own tensor names) number that layer `mtp.layers.48`; the mixed-precision resolver never matched, so the experts were built without their scales. We add the draft-local index as a lookup candidate.
 - The mixed-precision config had no branch for `FP8_BLOCK_SCALES` experts at all (only NVFP4, per-tensor FP8, MXFP8); the MTP experts are 128x128 block-scaled FP8. We route that algo to vLLM's generic block-FP8 MoE method.
-Both are being reported upstream (`research/upstream-issue-modelopt-mtp-index.md`). The idea of leaving the table on disk is shared with vLLM PR #54129 (Trosfy) and with community single-Spark runs; the implementation here is independent (see `research/` for the prior-art notes and credit map).
+Both are being reported upstream (`research/upstream-issue-modelopt-mtp-index.md`). The same two gaps were fixed independently the same day by sfxnz (`docker/modelopt.py` in `sfxnz/Qwen3.8-Flash-Next-NVFP4-vLLM-2x-DGX-Spark`, MIT, commit 13:51 UTC, about two hours before ours) and by MiaAI-Lab (`files/patch_modelopt_fp8_block_moe.py` in `Qwen3.8-Flash-Next-Dual-DGX-Sparks`, AGPL-3.0, commit 16:07 UTC); the three implementations share no code. The idea of leaving the table on disk is shared with vLLM PR #54129 (Trosfy) and with community single-Spark runs; the implementation here is independent (see `research/` for the prior-art notes and credit map).
 
 ## Launch
 
@@ -51,7 +51,7 @@ PLE_MODE=mmap PLE_WORKERS=64 GRAPHS=piecewise MTP=4 KV_DTYPE=fp8_e4m3 \
 GMU=0.80 MAXLEN=262144 SEQS=8 bash launch/qwen38fn-nvidia-tp1.sh   # these are also the script's defaults
 ```
 
-Knobs: `PLE_MODE` (mmap | none), `GRAPHS` (eager | piecewise), `MTP` (0 | N), `KV_DTYPE` (auto | fp8_e4m3 | nvfp4), `OVERLAYS` (1 | 0), `GMU`, `MAXLEN`, `SEQS`, `PATCH_DIR`, `EXTRA`. Prefix caching is off by default (`PREFIX_CACHE_ARG`) until the GDN prefix-cache crash reported in vLLM #54173 is verified fixed in this image. `VLLM_USE_DEEP_GEMM=0` and `VLLM_USE_V2_MODEL_RUNNER=1` are set by the launcher (sm_121 findings, see research notes).
+Knobs: `PLE_MODE` (mmap | none), `GRAPHS` (eager | piecewise), `MTP` (0 | N), `KV_DTYPE` (auto | fp8_e4m3 | nvfp4), `OVERLAYS` (1 | 0), `GMU`, `MAXLEN`, `SEQS`, `PATCH_DIR`, `EXTRA`. Prefix caching is off by default (`PREFIX_CACHE_ARG`) until the GDN prefix-cache crash reported in vLLM #54173 (brainatworkharris) is verified fixed in this image. The launcher sets `VLLM_USE_DEEP_GEMM=0` (DeepGEMM faults on sm_121: vLLM issue #54125, jschmied), `VLLM_USE_V2_MODEL_RUNNER=1` (pins the V2 runner the nightly already selects), and `--no-enable-flashinfer-autotune` (FlashInfer autotune-cache failures on GB10 reported by jschmied); `CUTE_DSL_ARCH=sm_121a`, `TORCH_CUDA_ARCH_LIST=12.1a` and `expandable_segments` are the standard Spark vLLM environment (Flaviu Vlaicu's playbook, eugr's images, and our own earlier recipes).
 
 Endpoint: `http://<spark>:8000/v1`, model `qwen3.8-flash-next`, thinking off by default (`enable_thinking` per request).
 
@@ -69,7 +69,7 @@ One row per boot. Same weights resident in every row; only the KV pool moves.
 | **0.80** | **262,144** | **fp8_e4m3** | **piecewise** | **4** | **995,129** | **16.6** | **~16 GB** | **shipped default (this README's numbers)** |
 | 0.85 | 262,144 | fp8_e4m3 | piecewise | 4 | 1,170,740 | ~19.5 | ~10 GB | serves and passed the 176K stress (1,571 tok/s), but MemAvailable sat at 9.8 GB afterwards: works, tight, not the default |
 
-MTP4's draft head costs roughly 290K tokens of pool at the same gmu. `free -g` on a GB10 counts page cache as used; the "free after boot" column is `MemAvailable`. Community reports put the danger line around 10 GB available (swap creep, OOM kills on huge prefills), so 0.80 with MTP is the shipped setting and 0.82 is the ceiling we would recommend without MTP.
+MTP4's draft head costs roughly 290K tokens of pool at the same gmu. `free -g` on a GB10 counts page cache as used; the "free after boot" column is `MemAvailable`. Community reports put the danger line around 10 GB available: MiaAI-Lab's single-Spark README says to keep MemAvailable at or above ~10 GiB under load, and blazux reports gmu 0.85 drifting into swap after a day and 0.875 OOM-killed on a 300K prefill with MTP. So 0.80 with MTP is the shipped setting and 0.82 is the ceiling we would recommend without MTP.
 
 Weights load in ~9-10 minutes: the loader still streams the 47.68 GiB PLE file through RAM before the shards are dropped. Skipping those shards in the iterator is the next load-time improvement.
 
@@ -127,3 +127,14 @@ Count-to-100 sweep (`results/sweep_qwen38fn_tp1_mtp4_fp8_080.json`), aggregate t
 - `tools/` benchmark harness (`bench_lane.sh`, `bench_categories.py`, `bench_sweep.py`, `stress_prefill.py`, `probe-qwen38fn.sh`)
 - `results/` raw JSON per run, the KV pool ledger, the harness and stress logs, and the chart images (`chart_*_all.png` is the one-image summary; `tools/make_tweet_charts.py` builds them from the JSON)
 - `research/` runner internals notes and the GB10 prior-art / pitfalls survey with the credit map
+
+## TP2 lane (two Sparks, same stack)
+
+`launch/qwen38fn-nvidia-tp2.sh <0|1>` runs the identical stack across two Sparks over the RoCE fabric: rank 1 = worker (Spark4, 192.168.192.4, `--headless`), rank 0 = head (Reddie, 192.168.192.2, serves :8000). Start the worker first, then the head. Each rank mounts its own local copy of the checkpoint: the disk-backed table is read locally on every rank (random reads over NFS would crawl), and our lookup returns full rows on each rank, so no vocab-parallel all-reduce is needed for the table. Networking is the same NCCL-over-RoCE block the GLM TP4 lane uses (`NCCL_IB_HCA=rocep1s0f0`, GID 3, `enp1s0f0np0`).
+
+Boot: weights 321 s + draft head 67 s + graphs 5 s, about 10 minutes launch to serve.
+
+KV pool at gmu 0.80 (the default): **5,874,061 tokens (52 GiB), 22 concurrent 262K requests**. The head node sits at ~10.5 GB available at 0.80. If 0.80 gives you trouble on your boxes, `GMU=0.75` is the stable fallback (roughly 4.5M tokens of KV, scaled from the 0.80 measurement, not measured separately).
+
+(TP2 harness results: filled in below once the run completes)
+

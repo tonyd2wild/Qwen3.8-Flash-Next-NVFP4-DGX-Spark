@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Qwen3.8-Flash-Next NVFP4 (nvidia/ModelOpt) on ONE DGX Spark, TP1, vLLM. Kai 2026-09-04.
 # Defaults = the shipped production stack (2026-09-05): PLE table on disk, MTP4, FP8 KV, piecewise CUDA graphs, gmu 0.80, 262K.
-# Env knobs: IMAGE, PLE_MODE (mmap|offload|none), GRAPHS (eager|piecewise|default), KV_DTYPE (auto|fp8_e4m3|nvfp4), OVERLAYS (1|0), PATCH_DIR, GMU, MAXLEN, SEQS, MTP (0|N), PORT, EXTRA, PREFIX_CACHE_ARG (default off: GDN prefix-cache crash #54173 unverified here)
+# Env knobs: IMAGE, PLE_MODE (mmap|offload|none), GRAPHS (eager|piecewise|default), KV_DTYPE (auto|fp8_e4m3|nvfp4), OVERLAYS (1|0), PATCH_DIR, GMU, MAXLEN, SEQS, MTP (0|N), PORT, EXTRA, PREFIX_CACHE_ARG (default off: GDN prefix-cache crash vLLM #54173 by brainatworkharris, unverified here)
 set -euo pipefail
 IMAGE="${IMAGE:-vllm/vllm-openai:nightly-8a728663c1c3eeace834a95f5654fa653cc1998c}"
 NAME="${NAME:-vllm_qwen38fn}"
@@ -23,7 +23,9 @@ KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"; KV_ARGS=(); if [ "$KV_DTYPE" != "auto" ]; then
 # Upstream overlays (credited, unmodified upstream vLLM code applied onto the nightly's files):
 #   PR #55375 peakcrosser7 (merged 09-05): fused PLE conv state-index stride fix (MTP + concurrent prefills)
 #   PR #54846 andreasgru (open): fp8_e4m3 / nvfp4 KV cache on the QSA path
-#   modelopt.py: OUR fix (Kai): map vLLM MTP layer index (num_hidden_layers+i) to ModelOpt's draft-local key (mtp.layers.i)
+#   modelopt.py: OUR two fixes (Kai, 2026-09-05): (1) draft-local MTP index candidates so mtp.layers.48 finds ModelOpt's
+#     mtp.layers.0 entry; (2) FP8_BLOCK_SCALES routed experts -> Fp8MoEMethod (128x128 block scales). The same gaps were
+#     fixed independently the same day by sfxnz (MIT) and MiaAI-Lab (AGPL); no shared code.
 OVERLAYS="${OVERLAYS:-1}"; OVERLAY_MOUNT=()
 if [ "$OVERLAYS" = "1" ]; then
   VP=/usr/local/lib/python3.12/dist-packages/vllm

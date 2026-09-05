@@ -1,3 +1,5 @@
+> Licensing: this directory's kernel is MiaAI-Lab's (AGPL-3.0-or-later, see `LICENSE` here); it ports sgl-project/sglang PRs #36806 and #36845, both by BBuf (Apache-2.0, merged 2026-08-28 and 2026-08-30). The upstream Apache-2.0 kernel is bundled unchanged as `../pr36845.diff`. Nothing here runs in the served stacks.
+
 # Community-reported SM121 kernel fix (NOT tested by us)
 
 `sm121_varlen.py` is a reference copy of the Triton packed-varlen QSA decode

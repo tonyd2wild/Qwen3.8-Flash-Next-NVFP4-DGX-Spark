@@ -256,6 +256,8 @@ Why compile is off in SPEED: with the table resident, torch.compile's Inductor a
 
 ![speed vs context](results/chart_qwen38fn_speed_vs_context.png)
 
+**Do not combine the 4096-token prefill chunk with torch.compile on.** Measured 2026-09-05 evening: with piecewise compile the same `--max-num-batched-tokens 4096` that gives +50% under compile-off drops single-stream decode to 8 to 15 tok/s at TP2 and 14.6 tok/s at TP4 (TTFT 800 ms). The SPEED profile therefore always pairs the chunk with `{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY"}`. CONTEXT keeps the default chunk with compile on. The earlier note that our resident-slice patch mode was slow is superseded: that boot also carried the chunk with compile on, so the cause was this interaction, not the slice; a clean re-test with the default chunk is pending.
+
 **TP4 note (2026-09-05, 5:20 PM):** the SPEED settings do not carry to four Sparks as-is. TP4 with the table in memory, compile off, MTP3, 6 seqs and the 4096 chunk (expert parallel, gmu 0.70, pool 6.25M) measured 29.9 tok/s median single stream against 40.5 for TP4 CONTEXT. With expert parallel across four boxes, losing compile costs more than the recipe settings return. TP4 therefore stays on CONTEXT until the compile-on variants are measured (disk table + recipe settings, then table in memory + compile, which fits at TP4 because the compile-time duplicate is only 12 GB per box). Rows for every boot are in `results/kv_pool_ledger.md`.
 
 ### Single stream (x1), tok/s
@@ -304,6 +306,8 @@ Counting-to-100 ceiling (footnote, never a headline), x1 / x6 aggregate: 1 Spark
 | stock resident | RAM | off | 4 | 8 | 4096 | 0.70 | 1,832,462 | 45.1 | chunk alone recovers most of it; peak row 66.9 |
 | stock resident | RAM | off | 3 | 6 | 4096 | 0.70 | 1,970,051 | 53.7 | **SPEED default** |
 | ours, resident slice | RAM (our patch) | on (piecewise) | 3 | 6 | 4096 | 0.70 | 1,278,944 | 8 to 15 | boots clean, too slow as implemented; experimental |
+| stock resident, TP4 + EP | RAM | off | 3 | 6 | 4096 | 0.70 | 6,246,558 | 29.9 | slower than TP4 CONTEXT (40.5); loss concentrated in coding/math/JSON |
+| ours (disk), TP4 + EP | disk | on (piecewise) | 3 | 6 | 4096 | 0.75 | 8,595,716 | 14.6 | compile on + chunk 4096 = the slow combination; aborted |
 | stock resident + `--moe-backend flashinfer_cutlass` | RAM | off | 3 | 6 | 4096 | 0.70 | n/a | n/a | refused at load: the FP8 MTP experts (64x64 block scales) have no CUTLASS path on this build |
 
 Raw JSON for every row is under `results/` (`categories_<lane>_off_c{1,2,4,6}.json`, `sweep_<lane>.json`, `prefill_<lane>.txt`, `bench_*.log`).

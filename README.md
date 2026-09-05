@@ -128,6 +128,8 @@ Why compile is off in SPEED: with the table resident, torch.compile's Inductor a
 
 ![speed vs context](single-spark-vllm-tp1/results/chart_qwen38fn_speed_vs_context.png)
 
+**Do not combine the 4096-token prefill chunk with torch.compile on.** Measured 2026-09-05 evening: with piecewise compile the same `--max-num-batched-tokens 4096` that gives +50% under compile-off drops single-stream decode to 8 to 15 tok/s at TP2 and 14.6 tok/s at TP4 (TTFT 800 ms). The SPEED profile therefore always pairs the chunk with `{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY"}`. CONTEXT keeps the default chunk with compile on. The earlier note that our resident-slice patch mode was slow is superseded: that boot also carried the chunk with compile on, so the cause was this interaction, not the slice; a clean re-test with the default chunk is pending.
+
 **TP4 note (2026-09-05, 5:20 PM):** the SPEED settings do not carry to four Sparks as-is. TP4 with the table in memory, compile off, MTP3, 6 seqs and the 4096 chunk (expert parallel, gmu 0.70, pool 6.25M) measured 29.9 tok/s median single stream against 40.5 for TP4 CONTEXT. With expert parallel across four boxes, losing compile costs more than the recipe settings return. TP4 therefore stays on CONTEXT until the compile-on variants are measured (disk table + recipe settings, then table in memory + compile, which fits at TP4 because the compile-time duplicate is only 12 GB per box). Rows for every boot are in `results/kv_pool_ledger.md`.
 
 ### Single stream (x1), tok/s

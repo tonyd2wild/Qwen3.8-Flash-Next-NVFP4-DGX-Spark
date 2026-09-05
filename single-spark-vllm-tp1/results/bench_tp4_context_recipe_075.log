@@ -1,0 +1,9 @@
+ENDPOINT UP 17:58:03
+== qwen38fn_tp4_context_recipe_075 start 17:58:18
+== qwen38fn_tp4_context_recipe_075 C1 17:58:18
+    summary    auto=0.75  ttft=0.63s  decode=12.4  tokens=36
+    format     auto=1.0  ttft=0.72s  decode=13.5  tokens=20
+== qwen38fn_tp4_context_recipe_075 C2 18:08:57
+    batch 1: agg 20.2 tok/s, wall 27.1s
+  [qwen38fn_tp4_context_recipe_075/off/c2] json1    json       score=1.00  ttft  0.74s  decode  15.1 tok/s    66 tok  stop
+ABORTED after C1 (14.6 median: compile ON + chunk 4096 is the slow combination). TP4 CONTEXT-RECIPE-075 HARNESS DONE (aborted) 18:09:42

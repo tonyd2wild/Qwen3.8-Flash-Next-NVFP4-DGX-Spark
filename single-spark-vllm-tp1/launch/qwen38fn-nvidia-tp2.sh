@@ -3,7 +3,7 @@
 # Same stack as the single-Spark default: PLE table on disk (each rank reads its own local copy), MTP4, FP8 KV,
 # piecewise CUDA graphs, 262K. Usage: qwen38fn-nvidia-tp2.sh <0|1>   (run rank 1 = worker FIRST, then rank 0 = head)
 # Env knobs: IMAGE, PLE_MODE (mmap = table on disk | none = table resident in unified memory, each rank holds its half),
-#   GRAPHS (eager|piecewise|full|default), LANE (B = Reddie head + Spark4 [default] | A = Bluey head + Asusi), KV_DTYPE, OVERLAYS,
+#   GRAPHS (eager|piecewise|full|nocompile|default), LANE (B = Reddie head + Spark4 [default] | A = Bluey head + Asusi), KV_DTYPE, OVERLAYS,
 #   PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, MPORT, EXTRA
 set -euo pipefail
 NODE_RANK="${1:?usage: qwen38fn-nvidia-tp2.sh <0|1>}"
@@ -50,8 +50,12 @@ case "$GRAPHS" in
              GRAPH_MOUNT=(-v "$PATCH_DIR/compilation.py:$VP/config/compilation.py:ro") ;;
   full)      GRAPH_ARGS=(--compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE"}')
              GRAPH_MOUNT=(-v "$PATCH_DIR/compilation.py:$VP/config/compilation.py:ro") ;;
+  # nocompile: CUDA graphs for decode WITHOUT torch.compile. Needed when the PLE table is resident (PLE_MODE=none):
+  # Inductor autotune duplicates the n-gram table during compile (~24 GiB per rank at TP2, ~50 GiB at TP1), which
+  # starved and rebooted two Sparks on 2026-09-05. gau-nernst's open vLLM PR #55272 removes compile for that reason.
+  nocompile) GRAPH_ARGS=(--compilation-config '{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY"}') ;;
   default)   ;;
-  *) echo "GRAPHS must be eager|piecewise|full|default" >&2; exit 2 ;;
+  *) echo "GRAPHS must be eager|piecewise|full|nocompile|default" >&2; exit 2 ;;
 esac
 SPEC=(); if [ "$MTP" != "0" ]; then SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$MTP}"); fi
 docker rm -f "$NAME" 2>/dev/null || true

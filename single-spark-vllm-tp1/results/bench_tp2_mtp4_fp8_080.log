@@ -1,0 +1,25 @@
+== qwen38fn_tp2_mtp4_fp8_080 start 13:16:06
+== qwen38fn_tp2_mtp4_fp8_080 C1 13:16:06
+    summary    auto=0.75  ttft=0.24s  decode=26.0  tokens=31
+    format     auto=1.0  ttft=0.25s  decode=25.4  tokens=21
+== qwen38fn_tp2_mtp4_fp8_080 C2 13:20:38
+    summary    auto=0.75  ttft=0.28s  decode=24.0  tokens=31
+    format     auto=1.0  ttft=0.28s  decode=17.7  tokens=21
+== qwen38fn_tp2_mtp4_fp8_080 C4 13:24:01
+    summary    auto=0.6  ttft=0.33s  decode=19.3  tokens=27
+    format     auto=1.0  ttft=0.33s  decode=12.7  tokens=20
+== qwen38fn_tp2_mtp4_fp8_080 C6 13:26:51
+    summary    auto=0.75  ttft=0.4s  decode=16.3  tokens=30
+    format     auto=1.0  ttft=0.4s  decode=14.2  tokens=20
+== qwen38fn_tp2_mtp4_fp8_080 cold prefill ladder 13:29:15
+-- prefill 8000
+run 1: prompt_tokens=7087 ttft=4.9s total=5.2s prefill~1433 tok/s finish=stop answer='PELICAN-7' OK
+-- prefill 32000
+run 1: prompt_tokens=28228 ttft=13.5s total=13.7s prefill~2093 tok/s finish=stop answer='PELICAN-7' OK
+-- prefill 128000
+run 1: prompt_tokens=112738 ttft=54.7s total=54.9s prefill~2061 tok/s finish=stop answer='PELICAN-7' OK
+== qwen38fn_tp2_mtp4_fp8_080 counting ceiling (peak row only) 13:30:29
+  c5: agg  193.1 tok/s | per-stream  38.6 | w2w med  8.28s p90  8.83s | TTFT  4.25s
+  c6: agg  234.3 tok/s | per-stream  39.6 | w2w med  8.08s p90  8.26s | TTFT  4.98s
+JSON -> results/sweep_qwen38fn_tp2_mtp4_fp8_080.json
+== qwen38fn_tp2_mtp4_fp8_080 done 13:33:28

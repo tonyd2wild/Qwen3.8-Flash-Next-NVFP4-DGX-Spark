@@ -88,3 +88,23 @@ The MTP head costs roughly 290K tokens of pool at the same gmu. Pick your own he
 - Credited upstream overlays, unmodified: vLLM PR #55375 (peakcrosser7, MTP conv-state stride fix) and PR #54846 (andreasgru, FP8 KV on the QSA attention path). Leaving the table on disk as an idea is shared with vLLM PR #54129 (Trosfy) and other single-Spark runs; the implementation here is independent. The piecewise-CUDA-graph mode with the PLE lookup registered as a splitting op is the same mode blazux's single-Spark recipe ships (`blazux/qwen3.8-Flash-DGX`, Apache-2.0); Trosfy's early #54129 revision also went through a custom op. Launcher settings taken from community findings: `VLLM_USE_DEEP_GEMM=0` (vLLM issue #54125, jschmied), prefix caching off (vLLM issue #54173, brainatworkharris), `--no-enable-flashinfer-autotune` (jschmied's FlashInfer autotune-cache reports). FP8 KV: PR #54846 (andreasgru) and RFC #54426 (Nanetnounou). The ~10 GB free-memory floor comes from MiaAI-Lab's single-Spark README and blazux's swap/OOM reports. Full prior-art notes, the credit map and the credits audit are in `single-spark-vllm-tp1/research/`. Licensing: Apache-2.0 (`LICENSE`, `NOTICE`); the reference kernel under `lanes/sglang-tp2/community-fix/` is MiaAI-Lab's and AGPL-3.0-or-later.
 
 Details, diffs, launcher knobs, the harness and every raw result: [`single-spark-vllm-tp1/README.md`](single-spark-vllm-tp1/README.md).
+
+## Two Sparks (TP2), same stack
+
+Same launcher family, same flags (MTP4, FP8 KV, CUDA graphs, gmu 0.80, 262K), split across two Sparks over the ConnectX fabric (`single-spark-vllm-tp1/launch/qwen38fn-nvidia-tp2.sh`). Same 40 prompts, same harness, cold prefill.
+
+![one Spark vs TP2](single-spark-vllm-tp1/results/chart_qwen38fn_tp1_vs_tp2.png)
+
+| | 1 Spark | 2 Sparks (TP2) | Change |
+|---|---|---|---|
+| KV pool (tokens) | 995,129 | 5,874,061 | 5.9x |
+| Single stream, median of 40 prompts | 32.5 tok/s | 35.8 tok/s | +10% |
+| Single stream, prose | 21.7 tok/s | 24.1 tok/s | +11% |
+| TTFT single stream | 300 ms | 250 ms | -17% |
+| x4 per stream / aggregate | 23.0 / 42.0 | 27.8 / 43.1 | +21% / +3% |
+| x6 per stream / aggregate | 19.2 / 62.5 | 22.3 / 65.5 | +16% / +5% |
+| x6 TTFT | 690 ms | 410 ms | -41% |
+| Prefill 28K / 113K / 176K | 1,654 / 1,643 / 1,660 | 2,093 / 2,061 / 2,038 | +27% / +25% / +23% |
+
+What TP2 buys: every reply is faster, the first token arrives sooner, prefill is a quarter faster, and the KV pool is nearly six times larger. What it does not buy: aggregate batch throughput barely moves, because MTP4 already fills the batch on one Spark. Quality scores are identical. Full tables and raw JSON in `single-spark-vllm-tp1/README.md`.
+

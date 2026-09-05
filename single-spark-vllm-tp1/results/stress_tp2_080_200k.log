@@ -1,0 +1,1 @@
+run 1: prompt_tokens=176134 ttft=86.4s total=86.4s prefill~2038 tok/s finish=stop answer='PELICAN-7' OK

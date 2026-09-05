@@ -136,5 +136,48 @@ Boot: weights 321 s + draft head 67 s + graphs 5 s, about 10 minutes launch to s
 
 KV pool at gmu 0.80 (the default): **5,874,061 tokens (52 GiB), 22 concurrent 262K requests**. The head node sits at ~10.5 GB available at 0.80. If 0.80 gives you trouble on your boxes, `GMU=0.75` is the stable fallback (roughly 4.5M tokens of KV, scaled from the 0.80 measurement, not measured separately).
 
-(TP2 harness results: filled in below once the run completes)
+
+### TP2 results (same harness; single Spark / TP2, with the change)
+
+Single stream (x1), per category, tok/s:
+
+| Category | 1 Spark | TP2 | Change |
+|---|---|---|---|
+| Prose | 21.7 | 24.1 | +11% |
+| Coding | 34.4 | 37.3 | +8% |
+| Math / logic | 36.0 | 38.9 | +8% |
+| JSON | 43.7 | 38.2 | -13% |
+| HTML | 42.4 | 45.1 | +6% |
+| Narrative | 18.7 | 21.8 | +17% |
+| Summary | 21.2 | 26.0 | +23% |
+| Format | 22.2 | 25.4 | +14% |
+| Median of all 40 | 32.5 | 35.8 | +10% |
+
+Concurrent load (1 Spark / TP2):
+
+| Load | TTFT | Per stream (all prompts) | Prose per stream | Aggregate |
+|---|---|---|---|---|
+| x1 | 300 / 250 ms (-17%) | 32.5 / 35.8 (+10%) | 21.7 / 24.1 | 32.5 / 35.8 (+10%) |
+| x2 | 350 / 290 ms (-17%) | 31.0 / 32.1 (+4%) | 18.3 / 19.5 | 38.8 / 40.6 (+5%) |
+| x4 | 440 / 340 ms (-23%) | 23.0 / 27.8 (+21%) | 19.7 / 20.0 | 42.0 / 43.1 (+3%) |
+| x6 | 690 / 410 ms (-41%) | 19.2 / 22.3 (+16%) | 14.7 / 16.1 | 62.5 / 65.5 (+5%) |
+
+Quality scores are identical between the two shapes (coding, math, JSON, format 1.0 at every load). TP2's gains are per-reply speed and time to first token; batch aggregate barely moves because it is paced by the longest reply in each batch and MTP already fills the batch. The KV pool is the big difference: 5,874,061 tokens vs 995,129.
+
+Cold prefill ladder (1 Spark / TP2, tok/s, needle answered correctly at every rung):
+
+| Prompt | 1 Spark | TP2 | Change |
+|---|---|---|---|
+| 7K | 1,206 | 1,433 | +19% |
+| 28K | 1,654 | 2,093 | +27% |
+| 113K | 1,643 | 2,061 | +25% |
+| 176K (200K stress) | 1,660 | 2,038 | +23% |
+
+TTFT on the 176K prompt: 106 s on one Spark, 86 s on TP2. Both lanes were healthy after the stress run.
+
+Footnote, never a headline: the synthetic counting-to-100 ceiling at x6 is 194 tok/s aggregate on one Spark and 234 on TP2.
+
+![one Spark vs TP2](results/chart_qwen38fn_tp1_vs_tp2.png)
+
+Raw: `results/categories_qwen38fn_tp2_mtp4_fp8_080_off_c{1,2,4,6}.json`, `results/prefill_qwen38fn_tp2_mtp4_fp8_080.txt`, `results/sweep_qwen38fn_tp2_mtp4_fp8_080.json`, `results/stress_tp2_080_200k.log`, `results/bench_tp2_mtp4_fp8_080.log`. Chart: `tools/make_tp2_charts.py`; comparison: `tools/compare_lanes.py`.
 

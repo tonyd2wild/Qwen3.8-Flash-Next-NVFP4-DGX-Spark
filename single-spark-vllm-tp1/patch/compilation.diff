@@ -1,0 +1,10 @@
+--- a/vllm/config/compilation.py	2026-09-05 11:21:19
++++ b/vllm/config/compilation.py	2026-09-05 11:23:24
+@@ -769,6 +769,7 @@
+         "vllm::mamba_mixer",
+         "vllm::short_conv",
+         "vllm::qwen4_exp_compute_ple_ngram_ids",
++        "vllm::qwen4_exp_ple_mmap_gather",  # Kai/2Wild: disk-backed PLE gather (host sync) stays outside piecewise graphs
+         "vllm::qwen4_exp_ple_short_conv",
+         "vllm::qwen4_exp_qsa_with_output",
+         "vllm::linear_attention",

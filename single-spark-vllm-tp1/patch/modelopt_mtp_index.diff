@@ -1,0 +1,81 @@
+--- /private/tmp/claude-501/-Users-clawdbot/ef3eadcb-21f6-4df8-b0d8-0fccf98884bb/scratchpad/qwen4exp/upstream/modelopt.py	2026-09-05 11:55:20
++++ /private/tmp/claude-501/-Users-clawdbot/ef3eadcb-21f6-4df8-b0d8-0fccf98884bb/scratchpad/qwen4exp/patch/upstream-overlays/modelopt.py	2026-09-05 12:11:54
+@@ -7,6 +7,7 @@
+ from fnmatch import fnmatch
+ from typing import TYPE_CHECKING, Any, cast
+ 
++import re
+ import torch
+ from torch.nn.parameter import Parameter
+ 
+@@ -1679,7 +1680,24 @@
+                         f"Mixed quant_algo within fused layer {prefix}: "
+                         f"{shard_algos}. All shards must use the same quantization."
+                     )
++
++        return None
+ 
++    def _quantized_layer_group_size(self, prefix: str) -> int | None:
++        """Kai/2Wild: group_size of the quantized_layers entry that covers prefix."""
++        for cand in self._quantized_layer_prefix_candidates(prefix):
++            info = self.quantized_layers.get(cand)
++            if info is None:
++                cand_dot = cand + "."
++                for key, v in self.quantized_layers.items():
++                    if key.startswith(cand_dot):
++                        info = v
++                        break
++            if info:
++                try:
++                    return int(info.get("group_size") or 0) or None
++                except (TypeError, ValueError):
++                    return None
+         return None
+ 
+     @staticmethod
+@@ -1689,6 +1707,20 @@
+         if prefix.endswith(".lm_head"):
+             candidates.append("lm_head")
+ 
++        # Kai/2Wild 2026-09-05: MTP draft layers are numbered from
++        # num_hidden_layers in vLLM (and in NVIDIA's Qwen3.8-Flash-Next-NVFP4
++        # weight names: mtp.layers.48.*), but ModelOpt's quantized_layers keys
++        # use the draft-local index (mtp.layers.0.mlp.experts). Without this
++        # the MTP experts resolve to no algo and the FP8_BLOCK_SCALES weights
++        # fail to load ("has no parameter 'w2_weight_scale_inv'"). Offer the
++        # draft-local index as an extra candidate (single- and multi-layer MTP).
++        m = re.match(r"^(.*?mtp\.layers\.)(\d+)(\..*)$", prefix)
++        if m:
++            k = int(m.group(2))
++            for j in range(0, min(k, 8) + 1):  # draft-local indices 0..k (bounded)
++                if j != k:
++                    candidates.append(f"{m.group(1)}{j}{m.group(3)}")
++
+         if prefix.startswith("language_model.model."):
+             candidates.append(
+                 "model.language_model." + prefix[len("language_model.model.") :]
+@@ -1744,7 +1776,24 @@
+                 return ModelOptNvFp4FusedMoE(
+                     quant_config=self.w4a16_nvfp4_config,
+                     moe_config=layer.moe_config,
++                )
++            if quant_algo in ("FP8_BLOCK_SCALES", "FP8_BLOCK"):
++                # Kai/2Wild 2026-09-05: NVIDIA's Qwen3.8-Flash-Next-NVFP4 stores the MTP
++                # routed experts as 128x128 block-scaled FP8 (weight_scale_inv). The mixed
++                # config had no branch for it; route to vLLM's generic block-FP8 MoE method.
++                from vllm.model_executor.layers.quantization.fp8 import (
++                    Fp8Config as _Fp8Config,
++                    Fp8MoEMethod as _Fp8MoEMethod,
+                 )
++                gs = self._quantized_layer_group_size(prefix) or 128
++                return _Fp8MoEMethod(
++                    _Fp8Config(
++                        is_checkpoint_fp8_serialized=True,
++                        activation_scheme="dynamic",
++                        weight_block_size=[gs, gs],
++                    ),
++                    layer,
++                )
+             if quant_algo == "MXFP8":
+                 return ModelOptMxFp8FusedMoE(
+                     quant_config=self.mxfp8_config,

@@ -1,0 +1,144 @@
+--- a/vllm/models/qwen4_exp/nvidia/ple_layer.py	2026-09-04 01:33:54
++++ b/vllm/models/qwen4_exp/nvidia/ple_layer.py	2026-09-05 11:23:24
+@@ -48,7 +48,18 @@
+ from ..common.ple import PLEVocabParallelEmbedding
+ from .ops.ple import ple_conv, ple_gate, ple_ngram_ids
+ 
++# --- Kai/2Wild 2026-09-05: disk-backed PLE table (see ops/ple_mmap.py) ---
++import os as _os
++from .ops.ple_mmap import PLEMmapTable
+ 
++def _ple_mmap_enabled() -> bool:
++    return _os.environ.get("QWEN4EXP_PLE_MMAP", "0") == "1"
++
++def _ple_mmap_threads() -> int | None:
++    v = _os.environ.get("QWEN4EXP_PLE_MMAP_THREADS")
++    return int(v) if v else None
++
++
+ class Qwen4ExpPLEGroupedNorm(nn.Module):
+     def __init__(
+         self,
+@@ -97,8 +108,14 @@
+     ) -> None:
+         del input_size, output_size, params_dtype
+         weight_loader = extra_weight_attrs.get("weight_loader")
++        rows = sum(output_partition_sizes)
++        if _ple_mmap_enabled():
++            # Table stays on disk; keep a 1-row placeholder so the module
++            # graph, scale handling and dtype introspection stay intact.
++            rows = 1
++            layer._ple_mmap = True
+         weight = create_fp8_weight_parameter(
+-            sum(output_partition_sizes), input_size_per_partition, weight_loader
++            rows, input_size_per_partition, weight_loader
+         )
+         layer.register_parameter("weight", weight)
+ 
+@@ -459,8 +476,49 @@
+             ngram_ids,
+             self.layer_name,
+         )
++        if getattr(self.ngram_embedding, "_ple_mmap", False):
++            return self._ple_mmap_lookup(ngram_ids)
+         return self.ngram_embedding(ngram_ids).flatten(-2)
+ 
++    # --- Kai/2Wild: disk-backed lookup path -------------------------------
++    def _ple_mmap_table(self) -> PLEMmapTable:
++        table = getattr(self, "_ple_table", None)
++        if table is None:
++            model_dir = getattr(self, "_ple_model_dir", None) or _os.environ.get(
++                "QWEN4EXP_PLE_MODEL_DIR"
++            )
++            if not model_dir:
++                raise RuntimeError(
++                    "PLE mmap: model dir unknown (set at PLE layer init or "
++                    "QWEN4EXP_PLE_MODEL_DIR)"
++                )
++            layer_idx = int(self.layer_name.rsplit("layers.", 1)[1].split(".", 1)[0])
++            table = PLEMmapTable(model_dir, layer_idx, threads=_ple_mmap_threads())
++            if self.ngram_embedding.org_vocab_size != table.rows_total:
++                raise ValueError(
++                    f"PLE mmap table rows {table.rows_total} != vocab "
++                    f"{self.ngram_embedding.org_vocab_size}"
++                )
++            self._ple_table = table
++            self._ple_gpu_buf = None
++        return table
++
++    def _ple_mmap_lookup(self, ngram_ids: torch.Tensor) -> torch.Tensor:
++        table = self._ple_mmap_table()
++        # Graph-owned output storage (same pattern as the ngram-id op): the custom
++        # op below is a registered splitting op, so under PIECEWISE cudagraphs the
++        # host gather runs eagerly between captured pieces.
++        out = torch.empty(
++            (ngram_ids.numel(), table.row_bytes), dtype=torch.uint8, device=ngram_ids.device
++        )
++        torch.ops.vllm.qwen4_exp_ple_mmap_gather(ngram_ids, out, self.layer_name)
++        return out.view(table.dtype).view(ngram_ids.shape[0], self.ngram_heads * self.head_dim)
++
++    def _ple_mmap_gather_into(self, ngram_ids: torch.Tensor, out: torch.Tensor) -> None:
++        table = self._ple_mmap_table()
++        rows = table.gather_cpu(ngram_ids.detach().to("cpu", dtype=torch.int64))
++        out.copy_(rows, non_blocking=True)
++
+     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+         """Load hash buffers and checkpoint-split embedding rows."""
+ 
+@@ -508,6 +566,16 @@
+                     min(shard_size, embedding.org_vocab_size - checkpoint_start),
+                 )
+                 expected_shape = (expected_rows, embedding.embedding_dim)
++                if getattr(embedding, "_ple_mmap", False):
++                    if tuple(loaded_weight.shape) != expected_shape:
++                        raise ValueError(
++                            f"Shape mismatch for PLE embedding shard {shard_index}: "
++                            f"expected {expected_shape}, got "
++                            f"{tuple(loaded_weight.shape)}"
++                        )
++                    del loaded_weight  # rows are served from the mmapped file
++                    loaded.add("ngram_embedding.weight")
++                    continue
+                 if tuple(loaded_weight.shape) != expected_shape:
+                     raise ValueError(
+                         f"Shape mismatch for PLE embedding shard {shard_index}: "
+@@ -567,6 +635,9 @@
+             quant_config=quant_config,
+             params_dtype=model_config.dtype,
+         )
++        # Kai/2Wild: remember the checkpoint dir for the disk-backed PLE table
++        # (the forward runs outside the set_current_vllm_config() context).
++        self.ple_embedding._ple_model_dir = model_config.model
+         # The PLE cache is TP-replicated, so this merged projection is too.
+         self.kv_proj = MergedColumnParallelLinear(
+             int(config.ple_embed_dim),
+@@ -904,7 +975,29 @@
+     return
+ 
+ 
++
++# --- Kai/2Wild: disk-backed PLE gather as a splitting custom op -------------
++def _qwen4_exp_ple_mmap_gather(
++    ngram_ids: torch.Tensor, out: torch.Tensor, layer_name: str
++) -> None:
++    layer = get_forward_context().no_compile_layers[layer_name]
++    layer.ple_embedding._ple_mmap_gather_into(ngram_ids, out)
++
++
++def _qwen4_exp_ple_mmap_gather_fake(
++    ngram_ids: torch.Tensor, out: torch.Tensor, layer_name: str
++) -> None:
++    return None
++
++
+ direct_register_custom_op(
++    op_name="qwen4_exp_ple_mmap_gather",
++    op_func=_qwen4_exp_ple_mmap_gather,
++    mutates_args=["out"],
++    fake_impl=_qwen4_exp_ple_mmap_gather_fake,
++)
++
++direct_register_custom_op(
+     op_name="qwen4_exp_compute_ple_ngram_ids",
+     op_func=qwen4_exp_compute_ple_ngram_ids,
+     mutates_args=["output"],

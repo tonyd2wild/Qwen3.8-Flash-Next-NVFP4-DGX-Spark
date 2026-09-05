@@ -11,12 +11,14 @@ RES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 lanes = []
 args = sys.argv[1:]
 out, title = None, "Qwen 3.8 Flash Next NVFP4 (OFFICIAL NVIDIA quant): one DGX Spark vs two (TP2) vs four (TP4)"
+note = "Same stack on every lane: upstream vLLM + our PLE patch, FP8 KV, CUDA graphs, 262K context. Multi-Spark lanes run over the ConnectX fabric; TP4 adds expert parallel."
 i = 0
 while i < len(args):
     if args[i] == "--lane":
         name, label, kv, pf = args[i+1].split(":"); lanes.append((name, label, int(kv), pf)); i += 2
     elif args[i] == "--out": out = args[i+1]; i += 2
     elif args[i] == "--title": title = args[i+1]; i += 2
+    elif args[i] == "--note": note = args[i+1]; i += 2
     else: i += 1
 assert lanes, "need --lane"
 out = out or os.path.join(RES, "chart_scaling_" + "_vs_".join(l[0] for l in lanes) + ".png")
@@ -40,7 +42,7 @@ CATS = [("prose", "Prose"), ("coding", "Coding"), ("reasoning", "Math"), ("json"
 plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 10})
 fig = plt.figure(figsize=(16, 11.4), dpi=150, facecolor="white")
 fig.text(0.02, 0.975, title, fontsize=16.5, fontweight="bold", color=INK, va="top")
-fig.text(0.02, 0.940, "Same stack on every lane: upstream vLLM + our PLE-on-disk patch, MTP4, FP8 KV, CUDA graphs, gpu-memory-utilization 0.80, 262K context. Same 40 real prompts,\nthinking off, no prefix cache, cold prefill. Multi-Spark lanes run over the ConnectX fabric; TP4 adds expert parallel. Counting prompts excluded from every panel. Percentages vs one Spark.", fontsize=9.4, color=MUT, va="top", linespacing=1.5)
+fig.text(0.02, 0.940, note + "\nSame 40 real prompts, thinking off, no prefix cache, cold prefill. Counting prompts excluded from every panel. Percentages vs one Spark.", fontsize=9.4, color=MUT, va="top", linespacing=1.5)
 gs = fig.add_gridspec(2, 2, left=0.05, right=0.98, top=0.865, bottom=0.075, hspace=0.42, wspace=0.22, width_ratios=[1.15, 1])
 def style(ax):
     for s in ("top", "right"): ax.spines[s].set_visible(False)
@@ -52,30 +54,43 @@ def bars(ax, labels, series, ylabel, ttl, fmt="{:.0f}"):
         xs = [k - 0.4 + w*(j+0.5) for k in x]
         ax.bar(xs, s, w, color=COLS[j], label=lanes[j][1], zorder=3)
         for k, v in enumerate(s):
-            if j == 0: ax.text(xs[k], v + top*0.015, fmt.format(v), ha="center", va="bottom", fontsize=6.4, color=INK)
+            fs = 6.4 if n <= 3 else 5.4
+            if j == 0: ax.text(xs[k], v + top*0.015, fmt.format(v), ha="center", va="bottom", fontsize=fs, color=INK)
             else:
                 d = (v/series[0][k]-1)*100
-                ax.text(xs[k], v + top*0.015, fmt.format(v) + f"\n{d:+.0f}%", ha="center", va="bottom", fontsize=6.4, fontweight="bold", color=("#1e7a3c" if d >= 0 else "#b3261e"))
+                ax.text(xs[k], v + top*0.015, fmt.format(v) + f"\n{d:+.0f}%", ha="center", va="bottom", fontsize=fs, fontweight="bold", color=("#1e7a3c" if d >= 0 else "#b3261e"))
     ax.set_xticks(list(x)); ax.set_xticklabels(labels); ax.set_ylabel(ylabel, color=MUT); ax.set_ylim(0, top*1.24)
     ax.set_title(ttl, loc="left", fontsize=11.5, fontweight="bold", color=INK, pad=8); style(ax); ax.legend(frameon=False, fontsize=8.5, loc="upper left", ncol=len(series))
 ax = fig.add_subplot(gs[0, 0])
 bars(ax, [n for _, n in CATS] + ["Median\n(all 40)"], [[med(d[1], k) for k, _ in CATS] + [med(d[1])] for d in D], "tok/s per reply", "SINGLE STREAM (x1) by prompt category", "{:.1f}")
 ax = fig.add_subplot(gs[0, 1]); ax.axis("off")
 ax.set_title("UNDER LOAD: TTFT, per-stream and aggregate throughput", loc="left", fontsize=11.5, fontweight="bold", color=INK, pad=8)
-rows = []
-for c in (1, 2, 4, 6):
-    t = [d[c]["overall"]["ttft_med_s"]*1000 for d in D]; s = [med(d[c]) for d in D]; g = [agg(d[c]) for d in D]
-    rows.append([f"x{c}", " / ".join(f"{v:.0f}" for v in t), " / ".join(f"{v:.1f}" for v in s), " / ".join(f"{v:.1f}" for v in g),
-                 " / ".join(f"{(v/t[0]-1)*100:+.0f}%" for v in t[1:]), " / ".join(f"{(v/s[0]-1)*100:+.0f}%" for v in s[1:]), " / ".join(f"{(v/g[0]-1)*100:+.0f}%" for v in g[1:])])
-order = " / ".join(l[1] for l in lanes); chg = " / ".join(l[1] for l in lanes[1:])
-hdr = ["Streams", "TTFT ms", "Per stream tok/s", "Aggregate tok/s", "TTFT chg", "Per stream chg", "Aggregate chg"]
-t = ax.table(cellText=rows, colLabels=hdr, loc="upper center", cellLoc="center", colWidths=[0.075, 0.14, 0.19, 0.19, 0.12, 0.145, 0.14], bbox=[0, 0.22, 1, 0.72])
-t.auto_set_font_size(False); t.set_fontsize(7.9)
-for (r, cc), cell in t.get_celld().items():
-    cell.set_edgecolor(GRID); cell.set_linewidth(0.8)
-    if r == 0: cell.set_facecolor("#f1f3f5"); cell.set_text_props(fontweight="bold", color=INK, fontsize=7.6)
-    elif cc >= 4: cell.set_text_props(fontweight="bold", color=INK)
-ax.text(0, 0.17, f"Values listed as {order}. Change columns vs one Spark, listed as {chg}.\nPer stream = median over the 40 prompts at that concurrency. Aggregate = harness wall clock,\nall streams summed. Lower TTFT is better. Quality scores identical on every lane.", fontsize=8.4, color=MUT, va="top", transform=ax.transAxes, linespacing=1.5)
+labels = [l[1] for l in lanes]
+def cellv(vals, fmt, lower_better=False):
+    outv = []
+    for j, v in enumerate(vals):
+        if j == 0: outv.append(fmt % v)
+        else:
+            d = (v/vals[0]-1)*100
+            outv.append((fmt % v) + f" ({d:+.0f}%)")
+    return outv
+blocks = [("TTFT, ms (lower is better)", lambda d: d["overall"]["ttft_med_s"]*1000, "%.0f"),
+          ("Per stream, tok/s (median of 40 prompts)", lambda d: med(d), "%.1f"),
+          ("Aggregate, tok/s (harness wall clock)", lambda d: agg(d), "%.1f")]
+y = 0.98
+for ttl, fn, fmt in blocks:
+    ax.text(0, y, ttl, fontsize=9, fontweight="bold", color=INK, va="top", transform=ax.transAxes); y -= 0.045
+    rows = [[f"x{c}"] + cellv([fn(d[c]) for d in D], fmt) for c in (1, 2, 4, 6)]
+    t = ax.table(cellText=rows, colLabels=["Streams"] + labels, loc="upper center", cellLoc="center", colWidths=[0.11] + [0.89/len(labels)]*len(labels), bbox=[0, y-0.235, 1, 0.235])
+    t.auto_set_font_size(False); t.set_fontsize(8)
+    for (r, cc), cell in t.get_celld().items():
+        cell.set_edgecolor(GRID); cell.set_linewidth(0.8)
+        if r == 0: cell.set_facecolor("#f1f3f5"); cell.set_text_props(fontweight="bold", color=INK, fontsize=7.8)
+        elif cc >= 2:
+            v = cell.get_text().get_text(); good = ("(-" in v) if ttl.startswith("TTFT") else ("(+" in v)
+            cell.set_text_props(color=("#1e7a3c" if good else "#b3261e"), fontweight="bold")
+    y -= 0.27
+ax.text(0, max(y, 0.0), "Percent change vs one Spark. Quality scores equal within noise on every lane.", fontsize=8.2, color=MUT, va="top", transform=ax.transAxes)
 ax = fig.add_subplot(gs[1, 0])
 P = [prefill(l[3]) for l in lanes]; n = min(len(p) for p in P)
 bars(ax, [f"{P[0][i][0]/1000:.0f}K prompt" for i in range(n)], [[p[i][1] for i in range(n)] for p in P], "prefill tok/s (cold, no prefix cache)", "PREFILL LADDER, cold, needle answered correctly at every rung")
@@ -83,7 +98,7 @@ ax = fig.add_subplot(gs[1, 1])
 kv = [l[2] for l in lanes]; ax.bar(range(len(kv)), [v/1e6 for v in kv], 0.55, color=COLS[:len(kv)], zorder=3)
 for i, v in enumerate(kv): ax.text(i, v/1e6 + max(kv)/1e6*0.02, f"{v:,}" + ("" if i else " tokens") + (f"\n{v/kv[0]:.1f}x" if i else ""), ha="center", fontsize=9.5, fontweight="bold", color=INK)
 ax.set_xticks(range(len(kv))); ax.set_xticklabels([l[1] for l in lanes]); ax.set_ylabel("KV pool, millions of tokens", color=MUT); ax.set_ylim(0, max(kv)/1e6*1.28)
-ax.set_title("KV POOL at gmu 0.80, FP8 KV, MTP4, 262K context", loc="left", fontsize=11.5, fontweight="bold", color=INK, pad=8); style(ax)
+ax.set_title("KV POOL, FP8 KV, 262K context (flags per lane in the footnote)", loc="left", fontsize=11.5, fontweight="bold", color=INK, pad=8); style(ax)
 ax.text(0.03, 0.95, "Each rank holds a slice of the weights,\nso the freed memory on every box becomes KV.\nFull 262K contexts in flight: " + " / ".join(str(v//262144) for v in kv) + ".", fontsize=8.6, color=MUT, va="top", transform=ax.transAxes, linespacing=1.5)
 ce = [ceiling(l[0]) for l in lanes]
 foot = "Footnote, not a headline: synthetic counting prompts (count to 100) peak at x6 aggregate " + " / ".join(f"{c:.0f}" if c else "n/a" for c in ce) + " tok/s. Left out of every panel above on purpose.\nPrefill is measured from cold TTFT on a single request; the 176K rung is the 200K stress prompt."

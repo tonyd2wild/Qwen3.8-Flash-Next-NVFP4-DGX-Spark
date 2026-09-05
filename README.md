@@ -109,7 +109,61 @@ Full tables, boot notes and raw JSON in `single-spark-vllm-tp1/README.md`. One S
 
 Details, diffs, launcher knobs, the harness and every raw result: [`single-spark-vllm-tp1/README.md`](single-spark-vllm-tp1/README.md).
 
-## Two Sparks (TP2), same stack
+## SPEED and CONTEXT profiles (TP2 default changed 2026-09-05 evening)
+
+Every lane runs the same official NVIDIA NVFP4 checkpoint on the same vLLM build. The one decision a deployer makes is where the 47.7 GB n-gram table lives, and that sets the profile:
+
+| Profile | Table | Launch (TP2) | What you get | What it costs |
+|---|---|---|---|---|
+| **SPEED** (TP2 default) | in unified memory, each Spark holds its half (stock loader) | `~/qwen38fn-nvidia-tp2.sh <rank>` (defaults) | 53.7 tok/s median single stream, 97.9 aggregate at six streams, 180 ms TTFT | KV pool 1.97M tokens (7 full 262K contexts) |
+| **CONTEXT** | on disk, rows read per step (our patch) | `PLE_MODE=mmap GRAPHS=piecewise MTP=4 SEQS=8 GMU=0.80 ~/qwen38fn-nvidia-tp2.sh <rank>` | KV pool 5.87M tokens (22 full contexts) | 35.8 tok/s median, 65.5 aggregate at six |
+
+One Spark is CONTEXT only: the whole table does not fit next to the weights on a single box. For an agent reading this on someone's behalf, ask one question: fastest replies for a few users (SPEED), or the longest context and the most parallel sessions (CONTEXT).
+
+SPEED profile flags, in vLLM terms: table loaded whole by the stock loader; `--compilation-config '{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY"}'` (CUDA graphs for decode, torch.compile off); `--speculative-config '{"method":"mtp","num_speculative_tokens":3}'`; `--max-num-seqs 6`; `--max-num-batched-tokens 4096`; `--kv-cache-dtype fp8_e4m3`; `--gpu-memory-utilization 0.70`; prefix caching off; FlashInfer autotune off. These are the SGLang recipe's settings carried over one by one; where the two engines differ, the vLLM equivalent is named in the lane README.
+
+What each piece is worth, measured one at a time on the same two Sparks (single stream, median of 40 prompts): table in memory with compile off and nothing else, 28.4 (a loss: compile's fused kernels matter more than the disk round trip); adding `--max-num-batched-tokens 4096`, 45.1; adding MTP3 and 6 seqs, 53.7. The 4096 prefill chunk is the single biggest lever and also lifts cold prefill from 2,093 to 2,784 tok/s at 28K.
+
+Why compile is off in SPEED: with the table resident, torch.compile's Inductor autotune makes a second copy of the table during compile (~24 GB per Spark at TP2), which starved and rebooted three Sparks here before the cause was found. gau-nernst's open vLLM PR #55272 removes compile from this model for exactly that reason; the finding is theirs. Our patch's resident-slice mode (table hidden from the compiler behind our gather op, `PLE_MODE=resident`) boots with compile on but ran at 8 to 15 tok/s in this build, so it is shipped as experimental only.
+
+![speed vs context](single-spark-vllm-tp1/results/chart_qwen38fn_speed_vs_context.png)
+
+### Single stream (x1), tok/s
+| | 1 Spark (CONTEXT) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
+|---|---|---|---|---|
+| Prose | 21.7 | 24.1 | 37.2 | 26.4 |
+| Coding | 34.4 | 37.3 | 56.0 | 44.5 |
+| Math / logic | 36.0 | 38.9 | 55.9 | 47.2 |
+| JSON | 43.7 | 38.2 | 61.9 | 47.8 |
+| HTML | 42.4 | 45.1 | 61.1 | 50.7 |
+| Narrative | 18.7 | 21.8 | 36.5 | 25.8 |
+| Summary | 21.2 | 26.0 | 42.8 | 27.3 |
+| Format | 22.2 | 25.4 | 38.4 | 26.8 |
+| **Median of all 40** | **32.5** | **35.8** | **53.7** | **40.5** |
+| TTFT (ms) | 300 | 250 | 180 | 220 |
+
+### Under load (per stream tok/s / aggregate tok/s / TTFT)
+| Load | 1 Spark (CONTEXT) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
+|---|---|---|---|---|
+| x2 per stream / aggregate / TTFT | 31.0 / 38.8 / 350 ms | 32.1 / 40.6 / 290 ms | 47.2 / 57.7 / 220 ms | 33.4 / 47.1 / 250 ms |
+| x4 per stream / aggregate / TTFT | 23.0 / 42.0 / 440 ms | 27.8 / 43.1 / 340 ms | 37.4 / 68.1 / 260 ms | 32.1 / 51.1 / 310 ms |
+| x6 per stream / aggregate / TTFT | 19.2 / 62.5 / 690 ms | 22.3 / 65.5 / 410 ms | 32.9 / 97.9 / 310 ms | 28.5 / 87.4 / 370 ms |
+
+### Cold prefill, tok/s (needle answered correctly at every rung)
+| Prompt | 1 Spark (CONTEXT) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
+|---|---|---|---|---|
+| 7K | 1,206 | 1,433 | 1,754 | 1,378 |
+| 28K | 1,654 | 2,093 | 2,784 | 2,453 |
+| 112K | 1,643 | 2,061 | 2,708 | 2,299 |
+
+### KV pool
+| | 1 Spark (CONTEXT) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
+|---|---|---|---|---|
+| KV pool (tokens) | 995,129 | 5,874,061 | 1,970,051 | 9,088,133 |
+
+Counting-to-100 ceiling (footnote, never a headline), x1 / x6 aggregate: 1 Spark (CONTEXT) 44 / 194; TP2 CONTEXT (old default) 51 / 234; TP2 SPEED (new default) 64 / 309; TP4 CONTEXT 54 / 262. Quality scores equal within noise on every lane (the two SPEED prompts that lost points ran 1 and 4 words over a word cap).
+
+## Two Sparks (TP2), CONTEXT profile, same stack as one Spark
 
 Same launcher family, same flags (MTP4, FP8 KV, CUDA graphs, gmu 0.80, 262K), split across two Sparks over the ConnectX fabric (`single-spark-vllm-tp1/launch/qwen38fn-nvidia-tp2.sh`). Same 40 prompts, same harness, cold prefill.
 

@@ -1,0 +1,12 @@
+PREVIOUS HARNESS DONE 16:17:05
+reddie cleared
+spark4 cleared
+vllm_qwen38fn Up 3 seconds
+vllm_qwen38fn Up 4 seconds
+RELAUNCHED RESIDENT+MIRROR 16:17:41
+ENDPOINT UP 16:40:27
+== qwen38fn_tp2_resident_mirror_070 start 16:40:37
+== qwen38fn_tp2_resident_mirror_070 C1 16:40:37
+  [qwen38fn_tp2_resident_mirror_070/off/c1] prose1   prose      score=0.00  ttft  0.88s  decode  14.7 tok/s   232 tok  stop  fails: words 188 in 120-180
+  [qwen38fn_tp2_resident_mirror_070/off/c1] prose2   prose      score=1.00  ttft  0.36s  decode   9.6 tok/s   143 tok  stop
+ABORTED: engine stats 8-15 tok/s at x1 (acceptance fine). LANE B RESIDENT HARNESS DONE (aborted) 16:48:07

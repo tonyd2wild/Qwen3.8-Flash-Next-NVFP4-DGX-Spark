@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Qwen3.8-Flash-Next NVFP4 (nvidia/ModelOpt) on TWO DGX Sparks, TP2 over the RoCE fabric, vLLM. Kai / Tech2Wild 2026-09-05.
-# Same stack as the single-Spark default: PLE table on disk (each rank reads its own local copy), MTP4, FP8 KV,
-# piecewise CUDA graphs, 262K. Usage: qwen38fn-nvidia-tp2.sh <0|1>   (run rank 1 = worker FIRST, then rank 0 = head)
+# DEFAULT = SPEED profile (measured 2026-09-05): n-gram table in unified memory (stock loader), CUDA graphs for decode with
+# torch.compile off, MTP3, 6 seqs, 4096-token prefill chunks, FP8 KV, gmu 0.70, 262K. 53.7 tok/s median single stream, 97.9 agg at x6,
+# KV pool 1.97M. CONTEXT profile (table on disk via our patch, 5.87M pool, 35.8 median): PLE_MODE=mmap GRAPHS=piecewise MTP=4 SEQS=8 GMU=0.80.
+# Usage: qwen38fn-nvidia-tp2.sh <0|1>   (run rank 1 = worker FIRST, then rank 0 = head)
 # Env knobs: IMAGE, PLE_MODE (mmap = table on disk [CONTEXT] | resident = our patch keeps each rank's slice in memory [SPEED] | none = stock loader, needs GRAPHS=nocompile),
 #   GRAPHS (eager|piecewise|full|nocompile|default), LANE (B = Reddie head + Spark4 [default] | A = Bluey head + Asusi), KV_DTYPE, OVERLAYS,
 #   PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, MPORT, TOOL_PARSER (qwen3_xml|qwen3_coder), EXTRA
@@ -11,9 +13,10 @@ IMAGE="${IMAGE:-vllm/vllm-openai:nightly-8a728663c1c3eeace834a95f5654fa653cc1998
 NAME="${NAME:-vllm_qwen38fn}"
 MODEL_HOST="${MODEL_HOST:-/var/tmp/models/Qwen3.8-Flash-Next-NVFP4-nvidia}"
 PATCH_DIR="${PATCH_DIR:-$HOME/patches/qwen4exp-ple-mmap}"
-PLE_MODE="${PLE_MODE:-mmap}"
-GMU="${GMU:-0.80}"; MAXLEN="${MAXLEN:-262144}"; SEQS="${SEQS:-8}"; MTP="${MTP:-4}"; PORT="${PORT:-8000}"
-KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"; GRAPHS="${GRAPHS:-piecewise}"; OVERLAYS="${OVERLAYS:-1}"
+PLE_MODE="${PLE_MODE:-none}"       # SPEED default (2026-09-05 evening): table in unified memory. CONTEXT: PLE_MODE=mmap
+GMU="${GMU:-0.70}"; MAXLEN="${MAXLEN:-262144}"; SEQS="${SEQS:-6}"; MTP="${MTP:-3}"; PORT="${PORT:-8000}"
+CHUNK="${CHUNK:-4096}"              # --max-num-batched-tokens; the single biggest speed lever measured on GB10 (see README)
+KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"; GRAPHS="${GRAPHS:-nocompile}"; OVERLAYS="${OVERLAYS:-1}"
 LANE="${LANE:-B}"
 case "$LANE" in
   B) HEAD_IP="192.168.192.2"; WORKER_IP="192.168.192.4"; MPORT="${MPORT:-29531}" ;;  # Reddie head, Spark4 worker
@@ -81,7 +84,7 @@ docker run --gpus all -d --name "$NAME" --restart no \
     /models/qwen38fn --served-model-name qwen3.8-flash-next \
     --host 0.0.0.0 --port "$PORT" --trust-remote-code \
     --quantization modelopt --tensor-parallel-size 2 \
-    --max-model-len "$MAXLEN" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GMU" \
+    --max-model-len "$MAXLEN" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GMU" --max-num-batched-tokens "$CHUNK" \
     --no-enable-flashinfer-autotune ${PREFIX_CACHE_ARG:---no-enable-prefix-caching} \
     --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser "${TOOL_PARSER:-qwen3_xml}" \
     --default-chat-template-kwargs "{\"enable_thinking\": false}" \

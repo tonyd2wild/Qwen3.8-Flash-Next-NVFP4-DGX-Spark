@@ -1,0 +1,27 @@
+ENDPOINT UP 16:11:35
+== qwen38fn_tp2_ram_mirror_070 start 16:11:45
+== qwen38fn_tp2_ram_mirror_070 C1 16:11:45
+    summary    auto=0.75  ttft=0.16s  decode=42.8  tokens=31
+    format     auto=1.0  ttft=0.16s  decode=38.4  tokens=21
+== qwen38fn_tp2_ram_mirror_070 C2 16:14:46
+    summary    auto=0.75  ttft=0.19s  decode=36.3  tokens=31
+    format     auto=1.0  ttft=0.19s  decode=30.4  tokens=21
+== qwen38fn_tp2_ram_mirror_070 C4 16:17:05
+    summary    auto=0.75  ttft=0.25s  decode=29.3  tokens=43
+    format     auto=1.0  ttft=0.25s  decode=25.1  tokens=20
+== qwen38fn_tp2_ram_mirror_070 C6 16:18:58
+    summary    auto=0.6  ttft=0.3s  decode=26.9  tokens=28
+    format     auto=1.0  ttft=0.3s  decode=20.5  tokens=20
+== qwen38fn_tp2_ram_mirror_070 cold prefill ladder 16:20:32
+-- prefill 8000
+run 1: prompt_tokens=7087 ttft=4.0s total=4.2s prefill~1754 tok/s finish=stop answer='PELICAN-7' OK
+-- prefill 32000
+run 1: prompt_tokens=28228 ttft=10.1s total=10.3s prefill~2784 tok/s finish=stop answer='PELICAN-7' OK
+-- prefill 128000
+run 1: prompt_tokens=112738 ttft=41.6s total=41.8s prefill~2708 tok/s finish=stop answer='PELICAN-7' OK
+== qwen38fn_tp2_ram_mirror_070 counting ceiling (peak row only) 16:21:28
+  c5: agg  239.0 tok/s | per-stream  48.0 | w2w med  6.67s p90  6.72s | TTFT  3.23s
+  c6: agg  309.2 tok/s | per-stream  51.5 | w2w med  6.21s p90  6.88s | TTFT  3.97s
+JSON -> results/sweep_qwen38fn_tp2_ram_mirror_070.json
+== qwen38fn_tp2_ram_mirror_070 done 16:23:50
+LANE A MIRROR HARNESS DONE 16:23:50

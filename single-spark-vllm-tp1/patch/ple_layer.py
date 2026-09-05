@@ -553,6 +553,8 @@ class Qwen4ExpNGramEmbedding(nn.Module):
 
     def _ple_load_resident_slice(self) -> None:
         """Resident mode: pull this rank's row range into a GPU uint8 tensor."""
+        if getattr(self, "_ple_resident", None) is not None:
+            return  # load_weights can be visited twice; one slab per rank, never two
         table = self._ple_mmap_table()
         emb = self.ngram_embedding
         start = int(emb.shard_indices.org_vocab_start_index)

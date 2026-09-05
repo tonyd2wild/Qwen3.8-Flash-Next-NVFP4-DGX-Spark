@@ -1,0 +1,27 @@
+ENDPOINT UP 15:53:58
+== qwen38fn_tp2_ram_nocompile_070 start 15:54:08
+== qwen38fn_tp2_ram_nocompile_070 C1 15:54:08
+    summary    auto=0.75  ttft=0.34s  decode=20.3  tokens=31
+    format     auto=1.0  ttft=0.35s  decode=19.7  tokens=21
+== qwen38fn_tp2_ram_nocompile_070 C2 15:59:38
+    summary    auto=0.75  ttft=0.77s  decode=18.1  tokens=40
+    format     auto=1.0  ttft=0.77s  decode=12.5  tokens=21
+== qwen38fn_tp2_ram_nocompile_070 C4 16:03:59
+    summary    auto=0.75  ttft=0.5s  decode=14.2  tokens=31
+    format     auto=1.0  ttft=0.5s  decode=11.6  tokens=21
+== qwen38fn_tp2_ram_nocompile_070 C6 16:07:45
+    summary    auto=0.75  ttft=0.89s  decode=12.4  tokens=31
+    format     auto=1.0  ttft=0.89s  decode=9.6  tokens=21
+== qwen38fn_tp2_ram_nocompile_070 cold prefill ladder 16:10:44
+-- prefill 8000
+run 1: prompt_tokens=7087 ttft=11.9s total=12.2s prefill~593 tok/s finish=stop answer='PELICAN-7' OK
+-- prefill 32000
+run 1: prompt_tokens=28228 ttft=21.8s total=22.1s prefill~1294 tok/s finish=stop answer='PELICAN-7' OK
+-- prefill 128000
+run 1: prompt_tokens=112738 ttft=90.4s total=90.4s prefill~1248 tok/s finish=stop answer='PELICAN-7' OK
+== qwen38fn_tp2_ram_nocompile_070 counting ceiling (peak row only) 16:12:49
+  c5: agg  140.3 tok/s | per-stream  28.2 | w2w med 11.34s p90 11.71s | TTFT  6.74s
+  c6: agg  167.7 tok/s | per-stream  28.3 | w2w med 11.29s p90 12.01s | TTFT  7.81s
+JSON -> results/sweep_qwen38fn_tp2_ram_nocompile_070.json
+== qwen38fn_tp2_ram_nocompile_070 done 16:16:59
+LANE B RAM HARNESS DONE 16:16:59

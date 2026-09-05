@@ -1,0 +1,33 @@
+PREVIOUS HARNESS DONE 16:23:54
+asusi cleared
+bluey cleared
+vllm_qwen38fn Up 3 seconds
+vllm_qwen38fn Up 3 seconds
+RELAUNCHED CHUNK4096-ONLY 16:24:17
+ENDPOINT UP 16:34:31
+== qwen38fn_tp2_ram_nocompile_chunk4096_070 start 16:34:41
+== qwen38fn_tp2_ram_nocompile_chunk4096_070 C1 16:34:41
+    summary    auto=0.75  ttft=0.18s  decode=39.6  tokens=31
+    format     auto=1.0  ttft=0.18s  decode=34.3  tokens=21
+== qwen38fn_tp2_ram_nocompile_chunk4096_070 C2 16:37:55
+    summary    auto=0.75  ttft=0.21s  decode=31.5  tokens=31
+    format     auto=1.0  ttft=0.24s  decode=24.4  tokens=21
+== qwen38fn_tp2_ram_nocompile_chunk4096_070 C4 16:40:23
+    summary    auto=0.75  ttft=0.27s  decode=25.0  tokens=31
+    format     auto=1.0  ttft=0.27s  decode=22.3  tokens=21
+== qwen38fn_tp2_ram_nocompile_chunk4096_070 C6 16:42:25
+    summary    auto=0.75  ttft=0.32s  decode=22.9  tokens=29
+    format     auto=1.0  ttft=0.32s  decode=18.1  tokens=21
+== qwen38fn_tp2_ram_nocompile_chunk4096_070 cold prefill ladder 16:44:00
+-- prefill 8000
+run 1: prompt_tokens=7087 ttft=3.6s total=3.8s prefill~1944 tok/s finish=stop answer='PELICAN-7' OK
+-- prefill 32000
+run 1: prompt_tokens=28228 ttft=10.2s total=10.4s prefill~2764 tok/s finish=stop answer='PELICAN-7' OK
+-- prefill 128000
+run 1: prompt_tokens=112738 ttft=42.7s total=42.7s prefill~2643 tok/s finish=stop answer='PELICAN-7' OK
+== qwen38fn_tp2_ram_nocompile_chunk4096_070 counting ceiling (peak row only) 16:44:57
+  c5: agg  260.7 tok/s | per-stream  53.0 | w2w med  6.04s p90  6.14s | TTFT  3.27s
+  c6: agg  284.6 tok/s | per-stream  48.0 | w2w med  6.67s p90  7.71s | TTFT  3.83s
+JSON -> results/sweep_qwen38fn_tp2_ram_nocompile_chunk4096_070.json
+== qwen38fn_tp2_ram_nocompile_chunk4096_070 done 16:47:14
+LANE A CHUNK HARNESS DONE 16:47:14

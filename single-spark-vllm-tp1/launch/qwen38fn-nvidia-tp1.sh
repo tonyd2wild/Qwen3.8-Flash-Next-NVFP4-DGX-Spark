@@ -27,6 +27,7 @@ PLE_ENV=(); case "$PLE_MODE" in
 esac
 KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"; KV_ARGS=(); if [ "$KV_DTYPE" != "auto" ]; then KV_ARGS=(--kv-cache-dtype "$KV_DTYPE"); fi
 # DRAFT_VOCAB=65536: reduced-vocabulary drafting for the MTP head (our overlay of vLLM's mtp.py; idea FR-Spec, shown on this model by MiaAI-Lab)
+VP=/usr/local/lib/python3.12/dist-packages/vllm
 DRAFT_ENV=(); DRAFT_MOUNT=()
 if [ -n "${DRAFT_VOCAB:-}" ]; then
   DRAFT_ENV=(-e QWEN4EXP_DRAFT_VOCAB="$DRAFT_VOCAB")

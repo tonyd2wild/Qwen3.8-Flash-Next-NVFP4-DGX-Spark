@@ -2,7 +2,9 @@
 # Qwen3.8-Flash-Next NVFP4 (nvidia/ModelOpt) on TWO DGX Sparks, TP2 over the RoCE fabric, vLLM. Kai / Tech2Wild 2026-09-05.
 # Same stack as the single-Spark default: PLE table on disk (each rank reads its own local copy), MTP4, FP8 KV,
 # piecewise CUDA graphs, 262K. Usage: qwen38fn-nvidia-tp2.sh <0|1>   (run rank 1 = worker FIRST, then rank 0 = head)
-# Env knobs: IMAGE, PLE_MODE (mmap|none), GRAPHS (eager|piecewise|default), KV_DTYPE, OVERLAYS, PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, EXTRA
+# Env knobs: IMAGE, PLE_MODE (mmap = table on disk | none = table resident in unified memory, each rank holds its half),
+#   GRAPHS (eager|piecewise|full|default), LANE (B = Reddie head + Spark4 [default] | A = Bluey head + Asusi), KV_DTYPE, OVERLAYS,
+#   PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, MPORT, EXTRA
 set -euo pipefail
 NODE_RANK="${1:?usage: qwen38fn-nvidia-tp2.sh <0|1>}"
 IMAGE="${IMAGE:-vllm/vllm-openai:nightly-8a728663c1c3eeace834a95f5654fa653cc1998c}"
@@ -12,14 +14,19 @@ PATCH_DIR="${PATCH_DIR:-$HOME/patches/qwen4exp-ple-mmap}"
 PLE_MODE="${PLE_MODE:-mmap}"
 GMU="${GMU:-0.80}"; MAXLEN="${MAXLEN:-262144}"; SEQS="${SEQS:-8}"; MTP="${MTP:-4}"; PORT="${PORT:-8000}"
 KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"; GRAPHS="${GRAPHS:-piecewise}"; OVERLAYS="${OVERLAYS:-1}"
-HEAD_IP="192.168.192.2"; MPORT="${MPORT:-29531}"
+LANE="${LANE:-B}"
+case "$LANE" in
+  B) HEAD_IP="192.168.192.2"; WORKER_IP="192.168.192.4"; MPORT="${MPORT:-29531}" ;;  # Reddie head, Spark4 worker
+  A) HEAD_IP="192.168.192.1"; WORKER_IP="192.168.192.3"; MPORT="${MPORT:-29532}" ;;  # Bluey head, Asusi worker
+  *) echo "LANE must be A or B" >&2; exit 2 ;;
+esac
 case "$NODE_RANK" in
-  0) HOST_IP=192.168.192.2; HEADLESS="" ;;            # Reddie = head, serves :PORT
-  1) HOST_IP=192.168.192.4; HEADLESS="--headless" ;;  # Spark4 = worker
+  0) HOST_IP="$HEAD_IP"; HEADLESS="" ;;               # head, serves :PORT
+  1) HOST_IP="$WORKER_IP"; HEADLESS="--headless" ;;   # worker
   *) echo "rank must be 0 or 1" >&2; exit 2 ;;
 esac
 CACHE_HOST="/var/tmp/qwen38fn-vllm-cache"; mkdir -p "$CACHE_HOST"
-test -f "$MODEL_HOST/config.json" || { echo "MODEL MISSING at $MODEL_HOST (each rank needs a LOCAL copy for the disk-backed table)" >&2; exit 3; }
+test -f "$MODEL_HOST/config.json" || { echo "MODEL MISSING at $MODEL_HOST (each rank needs a readable copy: local NVMe, or an NFS mount when PLE_MODE=none)" >&2; exit 3; }
 VP=/usr/local/lib/python3.12/dist-packages/vllm
 PLE_ENV=(); PLE_MOUNT=()
 if [ "$PLE_MODE" = "mmap" ]; then
@@ -41,8 +48,10 @@ case "$GRAPHS" in
   eager)     GRAPH_ARGS=(--enforce-eager) ;;
   piecewise) GRAPH_ARGS=(--compilation-config '{"cudagraph_mode":"PIECEWISE"}')
              GRAPH_MOUNT=(-v "$PATCH_DIR/compilation.py:$VP/config/compilation.py:ro") ;;
+  full)      GRAPH_ARGS=(--compilation-config '{"cudagraph_mode":"FULL_AND_PIECEWISE"}')
+             GRAPH_MOUNT=(-v "$PATCH_DIR/compilation.py:$VP/config/compilation.py:ro") ;;
   default)   ;;
-  *) echo "GRAPHS must be eager|piecewise|default" >&2; exit 2 ;;
+  *) echo "GRAPHS must be eager|piecewise|full|default" >&2; exit 2 ;;
 esac
 SPEC=(); if [ "$MTP" != "0" ]; then SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$MTP}"); fi
 docker rm -f "$NAME" 2>/dev/null || true
@@ -72,5 +81,5 @@ docker run --gpus all -d --name "$NAME" --restart no \
     "${SPEC[@]}" "${GRAPH_ARGS[@]}" "${KV_ARGS[@]}" \
     --distributed-executor-backend mp --nnodes 2 --node-rank "$NODE_RANK" \
     --master-addr "$HEAD_IP" --master-port "$MPORT" $HEADLESS ${EXTRA:-}
-echo "launched $NAME rank=$NODE_RANK host=$HOST_IP tp=2 ple=$PLE_MODE graphs=$GRAPHS kv=$KV_DTYPE mtp=$MTP gmu=$GMU maxlen=$MAXLEN"
+echo "launched $NAME lane=$LANE rank=$NODE_RANK host=$HOST_IP tp=2 ple=$PLE_MODE graphs=$GRAPHS kv=$KV_DTYPE mtp=$MTP gmu=$GMU maxlen=$MAXLEN"
 sleep 3; docker ps --format "{{.Names}} {{.Status}}" | grep "$NAME" || { echo "$NAME exited"; docker logs "$NAME" 2>&1 | tail -5; exit 1; }

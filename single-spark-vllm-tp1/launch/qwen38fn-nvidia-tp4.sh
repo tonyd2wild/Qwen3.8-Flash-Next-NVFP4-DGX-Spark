@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Qwen3.8-Flash-Next NVFP4 (nvidia/ModelOpt) on FOUR DGX Sparks, TP4 over the RoCE fabric, vLLM. Kai / Tech2Wild 2026-09-05.
-# Same stack as the single-Spark default: PLE table on disk (each rank reads its own local copy), MTP4, FP8 KV,
+# Same stack as the single-Spark default: PLE table on disk (each rank reads its own copy: local NVMe, or an NFS mount of
+# the head's copy via MODEL_HOST=/mnt/reddie-models/...; measured either way, see the README), MTP4, FP8 KV,
 # piecewise CUDA graphs, 262K. Usage: qwen38fn-nvidia-tp4.sh <0|1|2|3>  (run workers FIRST: 3 Bluey, 2 Asusi, 1 Spark4, then 0 = Reddie head)
 # Env knobs: IMAGE, PLE_MODE (mmap|none), GRAPHS (eager|piecewise|default), KV_DTYPE, OVERLAYS, PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, EXTRA
 set -euo pipefail
@@ -21,7 +22,7 @@ case "$NODE_RANK" in
   *) echo "rank must be 0-3" >&2; exit 2 ;;
 esac
 CACHE_HOST="/var/tmp/qwen38fn-vllm-cache"; mkdir -p "$CACHE_HOST"
-test -f "$MODEL_HOST/config.json" || { echo "MODEL MISSING at $MODEL_HOST (each rank needs a LOCAL copy for the disk-backed table)" >&2; exit 3; }
+test -f "$MODEL_HOST/config.json" || { echo "MODEL MISSING at $MODEL_HOST (each rank needs a readable copy for the disk-backed table: local NVMe or an NFS mount)" >&2; exit 3; }
 VP=/usr/local/lib/python3.12/dist-packages/vllm
 PLE_ENV=(); PLE_MOUNT=()
 if [ "$PLE_MODE" = "mmap" ]; then

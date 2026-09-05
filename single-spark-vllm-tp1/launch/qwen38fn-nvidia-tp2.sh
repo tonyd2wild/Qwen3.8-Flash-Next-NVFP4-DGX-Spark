@@ -63,7 +63,13 @@ case "$GRAPHS" in
   default)   ;;
   *) echo "GRAPHS must be eager|piecewise|full|nocompile|default" >&2; exit 2 ;;
 esac
-SPEC=(); if [ "$MTP" != "0" ]; then SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$MTP}"); fi
+# MTP_INDEX_SHARE=1 adds index_share_for_mtp_iteration=true (QSA indexer top-k reused across MTP draft steps; knob named by Chuck 208 @CK2084, 2026-09-05)
+SPEC=(); if [ "$MTP" != "0" ]; then
+  if [ "${MTP_INDEX_SHARE:-0}" = "1" ]; then SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$MTP,\"index_share_for_mtp_iteration\":true}");
+  else SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$MTP}"); fi
+fi
+# ASYNC_SCHED=1 adds --async-scheduling (also from Chuck 208's list)
+ASYNC_ARGS=(); [ "${ASYNC_SCHED:-0}" = "1" ] && ASYNC_ARGS=(--async-scheduling)
 docker rm -f "$NAME" 2>/dev/null || true
 sync; echo 3 | sudo -n tee /proc/sys/vm/drop_caches >/dev/null 2>&1 || true
 docker run --gpus all -d --name "$NAME" --restart no \
@@ -88,7 +94,7 @@ docker run --gpus all -d --name "$NAME" --restart no \
     --no-enable-flashinfer-autotune ${PREFIX_CACHE_ARG:---no-enable-prefix-caching} \
     --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser "${TOOL_PARSER:-qwen3_xml}" \
     --default-chat-template-kwargs "{\"enable_thinking\": false}" \
-    "${SPEC[@]}" "${GRAPH_ARGS[@]}" "${KV_ARGS[@]}" \
+    "${SPEC[@]}" "${ASYNC_ARGS[@]}" "${GRAPH_ARGS[@]}" "${KV_ARGS[@]}" \
     --distributed-executor-backend mp --nnodes 2 --node-rank "$NODE_RANK" \
     --master-addr "$HEAD_IP" --master-port "$MPORT" $HEADLESS ${EXTRA:-}
 echo "launched $NAME lane=$LANE rank=$NODE_RANK host=$HOST_IP tp=2 ple=$PLE_MODE graphs=$GRAPHS kv=$KV_DTYPE mtp=$MTP gmu=$GMU maxlen=$MAXLEN"

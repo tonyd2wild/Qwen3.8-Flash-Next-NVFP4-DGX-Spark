@@ -62,9 +62,9 @@ for c in (1, 2, 4, 6):
     tA, tB = A[c]["overall"]["ttft_med_s"]*1000, B[c]["overall"]["ttft_med_s"]*1000
     sA, sB = med(A[c]), med(B[c]); gA, gB = agg(A[c]), agg(B[c])
     rows.append([f"x{c}", f"{tA:.0f} / {tB:.0f} ms", f"{(tB/tA-1)*100:+.0f}%", f"{sA:.1f} / {sB:.1f}", f"{(sB/sA-1)*100:+.0f}%", f"{gA:.1f} / {gB:.1f}", f"{(gB/gA-1)*100:+.0f}%"])
-hdr = ["Streams", "TTFT 1 Spark / TP2", "chg", "Per stream tok/s", "chg", "Aggregate tok/s", "chg"]
-t = ax.table(cellText=rows, colLabels=hdr, loc="upper center", cellLoc="center", colWidths=[0.1, 0.2, 0.09, 0.19, 0.09, 0.19, 0.09], bbox=[0, 0.28, 1, 0.66])
-t.auto_set_font_size(False); t.set_fontsize(9.5)
+hdr = ["Streams", "TTFT ms (1 / TP2)", "chg", "Per stream tok/s", "chg", "Aggregate tok/s", "chg"]
+t = ax.table(cellText=rows, colLabels=hdr, loc="upper center", cellLoc="center", colWidths=[0.1, 0.21, 0.08, 0.19, 0.08, 0.19, 0.08], bbox=[0, 0.28, 1, 0.66])
+t.auto_set_font_size(False); t.set_fontsize(9)
 for (r, cc), cell in t.get_celld().items():
     cell.set_edgecolor(GRID); cell.set_linewidth(0.8)
     if r == 0: cell.set_facecolor("#f1f3f5"); cell.set_text_props(fontweight="bold", color=INK)
@@ -82,7 +82,7 @@ ax.bar([0, 1], [kvA/1e6, kvB/1e6], 0.55, color=[C1, C2], zorder=3)
 for i, v in enumerate((kvA, kvB)): ax.text(i, v/1e6 + 0.12, f"{v:,} tokens", ha="center", fontsize=10, fontweight="bold", color=INK)
 ax.set_xticks([0, 1]); ax.set_xticklabels(["1 Spark", "2 Sparks (TP2)"]); ax.set_ylabel("KV pool, millions of tokens", color=MUT); ax.set_ylim(0, kvB/1e6*1.25)
 ax.set_title("KV POOL at gmu 0.80, FP8 KV, MTP4, 262K context", loc="left", fontsize=11.5, fontweight="bold", color=INK, pad=8); style(ax)
-ax.text(0.5, 0.62, f"{kvB/kvA:.1f}x the pool: every rank holds half the weights,\nso the freed memory on both boxes becomes KV.\n{kvB//262144} full 262K contexts in flight on TP2 vs {kvA//262144} on one Spark.", ha="center", fontsize=9.2, color=MUT, transform=ax.transAxes, linespacing=1.5)
+ax.text(0.27, 0.60, f"{kvB/kvA:.1f}x the pool: every rank holds half the weights,\nso the freed memory on both boxes becomes KV.\n{kvB//262144} full 262K contexts in flight on TP2 vs {kvA//262144} on one Spark.", ha="center", fontsize=9.2, color=MUT, transform=ax.transAxes, linespacing=1.5)
 ca, cb = ceiling(a), ceiling(b)
 foot = "Footnote, not a headline: synthetic counting prompts (count to 100) peak at x6 aggregate " + (f"{ca:.0f} vs {cb:.0f} tok/s" if ca and cb else "n/a") + ". Left out of every panel above on purpose.\nPrefill above is measured from cold TTFT on a single request; the 176K rung is the 200K stress prompt. Weights read locally on each rank; no NFS in the serving path."
 fig.text(0.02, 0.012, foot, fontsize=8.4, color=MUT, va="bottom", linespacing=1.5)

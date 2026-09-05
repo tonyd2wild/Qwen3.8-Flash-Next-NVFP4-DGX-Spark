@@ -68,6 +68,14 @@ def _ple_resident_enabled() -> bool:
     return _os.environ.get("QWEN4EXP_PLE_RESIDENT", "0") == "1"
 
 
+def _ple_staged_enabled() -> bool:
+    # Staged mode (for FULL CUDA graphs without torch.compile): the host-side row gather runs in the
+    # model state's prepare_inputs, BEFORE the graph replay, into a fixed GPU buffer that the captured
+    # graph reads. Shape of the idea: Trosfy's vLLM PR #54129 (gather in input prep + stable buffers);
+    # this is our own implementation on top of our preadv reader.
+    return _os.environ.get("QWEN4EXP_PLE_STAGED", "0") == "1"
+
+
 def _ple_mmap_threads() -> int | None:
     v = _os.environ.get("QWEN4EXP_PLE_MMAP_THREADS")
     return int(v) if v else None
@@ -475,6 +483,12 @@ class Qwen4ExpNGramEmbedding(nn.Module):
         query_start_loc: torch.Tensor,
         ngram_context: torch.Tensor,
     ) -> torch.Tensor:
+        staging = getattr(self, "_ple_staging", None)
+        if staging is not None:
+            # Staged mode: rows were gathered into `staging` by the model state before this
+            # forward (or before the graph replay). Only tensor views here: graph-safe.
+            n = input_ids.reshape(-1).shape[0]
+            return staging[:n].view(self._ple_dtype).view(n, self.ngram_heads * self.head_dim)
         # Keep num_reqs-dependent ID generation outside PIECEWISE CUDA graphs,
         # which dispatch only on the padded token count.
         # torch.compile requires the splitting op to write graph-owned storage.
@@ -492,6 +506,39 @@ class Qwen4ExpNGramEmbedding(nn.Module):
         if getattr(self.ngram_embedding, "_ple_mmap", False):
             return self._ple_mmap_lookup(ngram_ids)
         return self.ngram_embedding(ngram_ids).flatten(-2)
+
+    # --- Kai/2Wild: staged gather (host side, before the graph) ------------
+    def _ple_init_staging(self, max_num_tokens: int, device: torch.device) -> None:
+        table = self._ple_mmap_table()
+        self._ple_staging = torch.zeros(
+            (int(max_num_tokens), int(table.row_bytes)), dtype=torch.uint8, device=device
+        )
+        self._ple_staging_pinned = None
+        logger.info(
+            "PLE staged gather: staging %d x %d bytes on %s",
+            int(max_num_tokens), int(table.row_bytes), device,
+        )
+
+    def _ple_stage_rows(
+        self,
+        input_ids: torch.Tensor,
+        query_start_loc: torch.Tensor,
+        ngram_context: torch.Tensor,
+        num_tokens: int,
+        padded_tokens: int,
+        real: bool = True,
+    ) -> None:
+        """Gather this step's rows into the staging buffer (called by the model state)."""
+        staging = self._ple_staging
+        if not real or num_tokens <= 0:
+            staging[: max(padded_tokens, 0)].zero_()
+            return
+        ids = self.compute_ngram_ids(input_ids[:num_tokens], query_start_loc, ngram_context)
+        table = self._ple_mmap_table()
+        rows = table.gather_cpu(ids.detach().to("cpu", dtype=torch.int64))
+        staging[:num_tokens].copy_(rows, non_blocking=True)
+        if padded_tokens > num_tokens:
+            staging[num_tokens:padded_tokens].zero_()
 
     # --- Kai/2Wild: disk-backed lookup path -------------------------------
     def _ple_mmap_table(self) -> PLEMmapTable:

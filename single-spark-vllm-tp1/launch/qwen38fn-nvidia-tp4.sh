@@ -26,12 +26,17 @@ CACHE_HOST="/var/tmp/qwen38fn-vllm-cache"; mkdir -p "$CACHE_HOST"
 test -f "$MODEL_HOST/config.json" || { echo "MODEL MISSING at $MODEL_HOST (each rank needs a readable copy for the disk-backed table: local NVMe or an NFS mount)" >&2; exit 3; }
 VP=/usr/local/lib/python3.12/dist-packages/vllm
 PLE_ENV=(); PLE_MOUNT=()
-if [ "$PLE_MODE" = "mmap" ] || [ "$PLE_MODE" = "resident" ]; then
+if [ "$PLE_MODE" = "mmap" ] || [ "$PLE_MODE" = "resident" ] || [ "$PLE_MODE" = "staged" ]; then
   PLE_ENV=(-e QWEN4EXP_PLE_MMAP=1 -e QWEN4EXP_PLE_MMAP_THREADS="${PLE_WORKERS:-64}")
   # resident: each rank keeps its slice of the FP8 table as a plain GPU tensor behind our gather op (TP4: 11.9 GiB per rank)
   [ "$PLE_MODE" = "resident" ] && PLE_ENV+=(-e QWEN4EXP_PLE_RESIDENT=1)
   PLE_MOUNT=(-v "$PATCH_DIR/ple_layer.py:$VP/models/qwen4_exp/nvidia/ple_layer.py:ro"
              -v "$PATCH_DIR/ple_mmap.py:$VP/models/qwen4_exp/nvidia/ops/ple_mmap.py:ro")
+  # staged: rows gathered in the model state's prepare_inputs (before the FULL graph replay) -> decode CUDA graphs with the table on disk
+  if [ "$PLE_MODE" = "staged" ]; then
+    PLE_ENV+=(-e QWEN4EXP_PLE_STAGED=1)
+    PLE_MOUNT+=(-v "$PATCH_DIR/model_state.py:$VP/models/qwen4_exp/nvidia/model_state.py:ro")
+  fi
 fi
 KV_ARGS=(); if [ "$KV_DTYPE" != "auto" ]; then KV_ARGS=(--kv-cache-dtype "$KV_DTYPE"); fi
 # DRAFT_VOCAB=65536: reduced-vocabulary drafting for the MTP head (our overlay of vLLM's mtp.py; idea FR-Spec, shown on this model by MiaAI-Lab)

@@ -16,9 +16,14 @@ PLE_ENV=(); case "$PLE_MODE" in
   mmap)    PLE_ENV=(-e QWEN4EXP_PLE_MMAP=1 -e QWEN4EXP_PLE_MMAP_THREADS="${PLE_WORKERS:-64}"
            -v $PATCH_DIR/ple_layer.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ple_layer.py:ro
            -v $PATCH_DIR/ple_mmap.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/ple_mmap.py:ro) ;;
+  staged)  # table on disk, rows gathered in the model state before each forward/graph replay (decode CUDA graphs with GRAPHS=nocompile)
+           PLE_ENV=(-e QWEN4EXP_PLE_MMAP=1 -e QWEN4EXP_PLE_STAGED=1 -e QWEN4EXP_PLE_MMAP_THREADS="${PLE_WORKERS:-64}"
+           -v $PATCH_DIR/ple_layer.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ple_layer.py:ro
+           -v $PATCH_DIR/ple_mmap.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/ops/ple_mmap.py:ro
+           -v $PATCH_DIR/model_state.py:/usr/local/lib/python3.12/dist-packages/vllm/models/qwen4_exp/nvidia/model_state.py:ro) ;;
   offload) PLE_ENV=(-e VLLM_PLE_CPU_OFFLOAD=1) ;;
   none)    ;;
-  *) echo "PLE_MODE must be mmap|offload|none" >&2; exit 2 ;;
+  *) echo "PLE_MODE must be mmap|staged|offload|none" >&2; exit 2 ;;
 esac
 KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"; KV_ARGS=(); if [ "$KV_DTYPE" != "auto" ]; then KV_ARGS=(--kv-cache-dtype "$KV_DTYPE"); fi
 # DRAFT_VOCAB=65536: reduced-vocabulary drafting for the MTP head (our overlay of vLLM's mtp.py; idea FR-Spec, shown on this model by MiaAI-Lab)

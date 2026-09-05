@@ -15,3 +15,5 @@ Every boot, its config, and the `GPU KV cache size` line vLLM printed. Memory co
 
 Stress: 200K-token prefill at row 4 (0.78, FP8 KV): needle answered correctly, TTFT 103.8 s (~1,900 tok/s prefill), MemAvailable stayed ~18.9 GB, no new driver errors.
 Stress at row 6 (0.82, FP8 KV): 176,134-token prompt, needle correct, TTFT 106.1 s (1,660 tok/s prefill), no driver errors.
+| 9 | Reddie | 0.80 | 262,144 | fp8_e4m3 | piecewise | 3 | 881,757 | ~14.7 | | | MTP3 twin for the A/B; smaller than Spark4's 995K at the same setting because Reddie carries the NFS server and more resident processes (node effect, not MTP3) |
+

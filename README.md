@@ -38,7 +38,7 @@ Harness: 40 real prompts, 8 categories x 5, thinking off, no prefix cache, cold 
 | Format | 22.2 | 0.29 s |
 | Median of all 40 prompts | 32.5 | 0.30 s |
 
-MTP4 acceptance: 64% overall, 3.56 tokens accepted per step on average. Eager floor without MTP or graphs is 15.4 tok/s on every category.
+MTP4 acceptance: 64% overall, 3.56 tokens accepted per step on average. Eager floor without MTP or graphs is 15.4 tok/s on every category. MTP3 was A/B'd against MTP4 on the same 8 prompts (`single-spark-vllm-tp1/results/ab_mtp3_vs_mtp4.log`): a tie on real prompts (overall median 31.8 vs 30.6), MTP4 ahead only on easy-draft text, so MTP4 stays the default.
 
 ### Concurrent load
 

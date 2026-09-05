@@ -1,0 +1,15 @@
+prose      MTP3:  21.3 tok/s (203 tok)   MTP4:  22.1 tok/s (225 tok)   ratio 1.04
+prose      MTP3:  21.8 tok/s (145 tok)   MTP4:  20.2 tok/s (142 tok)   ratio 0.92
+narrative  MTP3:  20.7 tok/s (235 tok)   MTP4:  19.7 tok/s (259 tok)   ratio 0.95
+code       MTP3:  34.1 tok/s (117 tok)   MTP4:  36.8 tok/s (117 tok)   ratio 1.08
+code       MTP3:  34.5 tok/s (157 tok)   MTP4:  34.1 tok/s (152 tok)   ratio 0.99
+json       MTP3:  36.0 tok/s (159 tok)   MTP4:  37.7 tok/s (161 tok)   ratio 1.05
+math       MTP3:  29.4 tok/s (60 tok)   MTP4:  27.2 tok/s (73 tok)   ratio 0.92
+count      MTP3:  38.6 tok/s (231 tok)   MTP4:  44.6 tok/s (231 tok)   ratio 1.16
+median code       MTP3:  34.3   MTP4:  35.4   ratio 1.03
+median count      MTP3:  38.6   MTP4:  44.6   ratio 1.16
+median json       MTP3:  36.0   MTP4:  37.7   ratio 1.05
+median math       MTP3:  29.4   MTP4:  27.2   ratio 0.92
+median narrative  MTP3:  20.7   MTP4:  19.7   ratio 0.95
+median prose      MTP3:  21.5   MTP4:  21.1   ratio 0.98
+overall median MTP3: 31.8   MTP4: 30.6

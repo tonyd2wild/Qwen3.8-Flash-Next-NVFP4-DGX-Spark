@@ -9,6 +9,7 @@ MODEL_HOST="/var/tmp/models/Qwen3.8-Flash-Next-NVFP4-nvidia"
 PATCH_DIR="${PATCH_DIR:-$HOME/patches/qwen4exp-ple-mmap}"
 PLE_MODE="${PLE_MODE:-mmap}"
 GMU="${GMU:-0.80}"; MAXLEN="${MAXLEN:-262144}"; SEQS="${SEQS:-8}"; MTP="${MTP:-4}"; PORT="${PORT:-8000}"
+CHUNK="${CHUNK:-}"                   # --max-num-batched-tokens; 4096 under test for the single-Spark default (2026-09-05)
 CACHE_HOST="/var/tmp/qwen38fn-vllm-cache"; mkdir -p "$CACHE_HOST"
 test -f "$MODEL_HOST/config.json" || { echo "MODEL MISSING at $MODEL_HOST" >&2; exit 3; }
 PLE_ENV=(); case "$PLE_MODE" in
@@ -58,7 +59,7 @@ docker run --gpus all -d --name "$NAME" --restart no \
     /models/qwen38fn --served-model-name qwen3.8-flash-next \
     --host 0.0.0.0 --port "$PORT" --trust-remote-code \
     --quantization modelopt --tensor-parallel-size 1 \
-    --max-model-len "$MAXLEN" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GMU" \
+    --max-model-len "$MAXLEN" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GMU" ${CHUNK:+--max-num-batched-tokens $CHUNK} \
     --no-enable-flashinfer-autotune ${PREFIX_CACHE_ARG:---no-enable-prefix-caching} \
     --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_xml \
     --default-chat-template-kwargs "{\"enable_thinking\": false}" \

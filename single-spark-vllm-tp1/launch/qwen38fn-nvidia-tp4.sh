@@ -12,6 +12,7 @@ MODEL_HOST="${MODEL_HOST:-/var/tmp/models/Qwen3.8-Flash-Next-NVFP4-nvidia}"
 PATCH_DIR="${PATCH_DIR:-$HOME/patches/qwen4exp-ple-mmap}"
 PLE_MODE="${PLE_MODE:-mmap}"
 GMU="${GMU:-0.80}"; MAXLEN="${MAXLEN:-262144}"; SEQS="${SEQS:-8}"; MTP="${MTP:-4}"; PORT="${PORT:-8000}"
+CHUNK="${CHUNK:-}"                   # set 4096 for the SPEED settings (--max-num-batched-tokens); empty = vLLM default
 KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"; GRAPHS="${GRAPHS:-piecewise}"; OVERLAYS="${OVERLAYS:-1}"
 HEAD_IP="192.168.192.2"; MPORT="${MPORT:-29541}"
 case "$NODE_RANK" in
@@ -46,8 +47,9 @@ case "$GRAPHS" in
   eager)     GRAPH_ARGS=(--enforce-eager) ;;
   piecewise) GRAPH_ARGS=(--compilation-config '{"cudagraph_mode":"PIECEWISE"}')
              GRAPH_MOUNT=(-v "$PATCH_DIR/compilation.py:$VP/config/compilation.py:ro") ;;
+  nocompile) GRAPH_ARGS=(--compilation-config '{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY"}') ;;
   default)   ;;
-  *) echo "GRAPHS must be eager|piecewise|default" >&2; exit 2 ;;
+  *) echo "GRAPHS must be eager|piecewise|nocompile|default" >&2; exit 2 ;;
 esac
 SPEC=(); if [ "$MTP" != "0" ]; then SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$MTP}"); fi
 docker rm -f "$NAME" 2>/dev/null || true
@@ -70,9 +72,9 @@ docker run --gpus all -d --name "$NAME" --restart no \
     /models/qwen38fn --served-model-name qwen3.8-flash-next \
     --host 0.0.0.0 --port "$PORT" --trust-remote-code \
     --quantization modelopt --tensor-parallel-size 4 \
-    --max-model-len "$MAXLEN" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GMU" \
+    --max-model-len "$MAXLEN" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GMU" ${CHUNK:+--max-num-batched-tokens $CHUNK} \
     --no-enable-flashinfer-autotune ${PREFIX_CACHE_ARG:---no-enable-prefix-caching} \
-    --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_xml \
+    --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser "${TOOL_PARSER:-qwen3_xml}" \
     --default-chat-template-kwargs "{\"enable_thinking\": false}" \
     "${SPEC[@]}" "${GRAPH_ARGS[@]}" "${KV_ARGS[@]}" \
     --distributed-executor-backend mp --nnodes 4 --node-rank "$NODE_RANK" \

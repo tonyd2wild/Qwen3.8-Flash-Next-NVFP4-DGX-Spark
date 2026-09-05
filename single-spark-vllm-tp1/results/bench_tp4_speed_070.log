@@ -1,0 +1,9 @@
+ENDPOINT UP 17:14:39
+== qwen38fn_tp4_speed_070 start 17:14:54
+== qwen38fn_tp4_speed_070 C1 17:14:54
+    summary    auto=0.75  ttft=0.27s  decode=25.3  tokens=34
+    format     auto=1.0  ttft=0.27s  decode=22.7  tokens=20
+== qwen38fn_tp4_speed_070 C2 17:19:59
+  [qwen38fn_tp4_speed_070/off/c2] html1    html       score=1.00  ttft  2.41s  decode  45.3 tok/s   749 tok  stop
+    batch 2: agg 43.1 tok/s, wall 18.9s
+ABORTED after C1 (29.9 median < TP4 CONTEXT 40.5). TP4 SPEED HARNESS DONE (aborted) 17:20:41

@@ -128,6 +128,8 @@ Why compile is off in SPEED: with the table resident, torch.compile's Inductor a
 
 ![speed vs context](single-spark-vllm-tp1/results/chart_qwen38fn_speed_vs_context.png)
 
+**TP4 note (2026-09-05, 5:20 PM):** the SPEED settings do not carry to four Sparks as-is. TP4 with the table in memory, compile off, MTP3, 6 seqs and the 4096 chunk (expert parallel, gmu 0.70, pool 6.25M) measured 29.9 tok/s median single stream against 40.5 for TP4 CONTEXT. With expert parallel across four boxes, losing compile costs more than the recipe settings return. TP4 therefore stays on CONTEXT until the compile-on variants are measured (disk table + recipe settings, then table in memory + compile, which fits at TP4 because the compile-time duplicate is only 12 GB per box). Rows for every boot are in `results/kv_pool_ledger.md`.
+
 ### Single stream (x1), tok/s
 | | 1 Spark (CONTEXT) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
 |---|---|---|---|---|

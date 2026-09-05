@@ -171,7 +171,7 @@ class Qwen4ExpModelState(MambaHybridModelState):
             ngram_context=ngram_context,
         )
         for m in self._staged_ple:
-            m._ple_staging[:num_tokens].zero_()  # capture-time: nothing host-side may be enqueued here
+            m._ple_stage_zero(num_tokens)  # capture-time: nothing host-side may be enqueued here
         return model_inputs
 
 

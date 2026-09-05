@@ -41,8 +41,13 @@ case "$GRAPHS" in
   eager)     GRAPH_ARGS=(--enforce-eager) ;;
   piecewise) GRAPH_ARGS=(--compilation-config '{"cudagraph_mode":"PIECEWISE"}')
              GRAPH_MOUNT=(-v "$PATCH_DIR/compilation.py:/usr/local/lib/python3.12/dist-packages/vllm/config/compilation.py:ro") ;;
+  # nocompile: CUDA graphs for decode without torch.compile (Inductor duplicates the PLE table at compile with a resident
+  # table; with the table on disk this is simply the eager path + decode graphs). CAPTURE_SIZES="4,8,12,16" pins the
+  # graph widths to (1+K)*seqs (MiaAI-Lab's README names this as the precondition for max-num-seqs > 4).
+  nocompile) if [ -n "${CAPTURE_SIZES:-}" ]; then GRAPH_ARGS=(--compilation-config "{\"mode\":0,\"cudagraph_mode\":\"FULL_DECODE_ONLY\",\"cudagraph_capture_sizes\":[${CAPTURE_SIZES}]}");
+             else GRAPH_ARGS=(--compilation-config '{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY"}'); fi ;;
   default)   ;;
-  *) echo "GRAPHS must be eager|piecewise|default" >&2; exit 2 ;;
+  *) echo "GRAPHS must be eager|piecewise|nocompile|default" >&2; exit 2 ;;
 esac
 SPEC=(); if [ "$MTP" != "0" ]; then SPEC=(--speculative-config "{\"method\":\"mtp\",\"num_speculative_tokens\":$MTP}"); fi
 docker rm -f "$NAME" 2>/dev/null || true

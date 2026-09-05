@@ -21,6 +21,12 @@ PLE_ENV=(); case "$PLE_MODE" in
   *) echo "PLE_MODE must be mmap|offload|none" >&2; exit 2 ;;
 esac
 KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"; KV_ARGS=(); if [ "$KV_DTYPE" != "auto" ]; then KV_ARGS=(--kv-cache-dtype "$KV_DTYPE"); fi
+# DRAFT_VOCAB=65536: reduced-vocabulary drafting for the MTP head (our overlay of vLLM's mtp.py; idea FR-Spec, shown on this model by MiaAI-Lab)
+DRAFT_ENV=(); DRAFT_MOUNT=()
+if [ -n "${DRAFT_VOCAB:-}" ]; then
+  DRAFT_ENV=(-e QWEN4EXP_DRAFT_VOCAB="$DRAFT_VOCAB")
+  DRAFT_MOUNT=(-v "$PATCH_DIR/mtp_draft_vocab.py:$VP/models/qwen4_exp/nvidia/mtp.py:ro")
+fi
 # Upstream overlays (credited, unmodified upstream vLLM code applied onto the nightly's files):
 #   PR #55375 peakcrosser7 (merged 09-05): fused PLE conv state-index stride fix (MTP + concurrent prefills)
 #   PR #54846 andreasgru (open): fp8_e4m3 / nvfp4 KV cache on the QSA path
@@ -59,7 +65,7 @@ docker run --gpus all -d --name "$NAME" --restart no \
   -e PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True -e CUTE_DSL_ARCH=sm_121a \
   -e TORCH_CUDA_ARCH_LIST=12.1a -e FLASHINFER_CUDA_ARCH_LIST=12.1a -e FLASHINFER_DISABLE_VERSION_CHECK=1 \
   -e VLLM_USE_DEEP_GEMM=0 -e VLLM_USE_V2_MODEL_RUNNER=1 \
-  "${PLE_ENV[@]}" "${GRAPH_MOUNT[@]}" "${OVERLAY_MOUNT[@]}" ${DOCKER_EXTRA:-} \
+  "${PLE_ENV[@]}" "${DRAFT_ENV[@]}" "${DRAFT_MOUNT[@]}" "${GRAPH_MOUNT[@]}" "${OVERLAY_MOUNT[@]}" ${DOCKER_EXTRA:-} \
   "$IMAGE" \
     /models/qwen38fn --served-model-name qwen3.8-flash-next \
     --host 0.0.0.0 --port "$PORT" --trust-remote-code \

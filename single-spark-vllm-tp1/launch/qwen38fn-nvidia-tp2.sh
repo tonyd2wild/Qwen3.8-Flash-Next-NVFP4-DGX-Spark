@@ -41,6 +41,12 @@ if [ "$PLE_MODE" = "mmap" ] || [ "$PLE_MODE" = "resident" ]; then
              -v "$PATCH_DIR/ple_mmap.py:$VP/models/qwen4_exp/nvidia/ops/ple_mmap.py:ro")
 fi
 KV_ARGS=(); if [ "$KV_DTYPE" != "auto" ]; then KV_ARGS=(--kv-cache-dtype "$KV_DTYPE"); fi
+# DRAFT_VOCAB=65536: reduced-vocabulary drafting for the MTP head (our overlay of vLLM's mtp.py; idea FR-Spec, shown on this model by MiaAI-Lab)
+DRAFT_ENV=(); DRAFT_MOUNT=()
+if [ -n "${DRAFT_VOCAB:-}" ]; then
+  DRAFT_ENV=(-e QWEN4EXP_DRAFT_VOCAB="$DRAFT_VOCAB")
+  DRAFT_MOUNT=(-v "$PATCH_DIR/mtp_draft_vocab.py:$VP/models/qwen4_exp/nvidia/mtp.py:ro")
+fi
 OVERLAY_MOUNT=()
 if [ "$OVERLAYS" = "1" ]; then
   OVERLAY_MOUNT=(-v "$PATCH_DIR/upstream-overlays/ops_ple.py:$VP/models/qwen4_exp/nvidia/ops/ple.py:ro"
@@ -85,7 +91,7 @@ docker run --gpus all -d --name "$NAME" --restart no \
   -e NCCL_SOCKET_IFNAME=enp1s0f0np0 -e GLOO_SOCKET_IFNAME=enp1s0f0np0 -e TP_SOCKET_IFNAME=enp1s0f0np0 -e MN_IF_NAME=enp1s0f0np0 \
   -e NCCL_NVLS_ENABLE=0 -e NCCL_CROSS_NIC=0 -e NCCL_IB_MERGE_NICS=0 -e NCCL_CUMEM_ENABLE=0 \
   -e NCCL_IGNORE_CPU_AFFINITY=1 -e NCCL_DEBUG=WARN -e TORCH_NCCL_ASYNC_ERROR_HANDLING=1 \
-  "${PLE_ENV[@]}" "${PLE_MOUNT[@]}" "${OVERLAY_MOUNT[@]}" "${GRAPH_MOUNT[@]}" ${DOCKER_EXTRA:-} \
+  "${PLE_ENV[@]}" "${PLE_MOUNT[@]}" "${DRAFT_ENV[@]}" "${DRAFT_MOUNT[@]}" "${OVERLAY_MOUNT[@]}" "${GRAPH_MOUNT[@]}" ${DOCKER_EXTRA:-} \
   "$IMAGE" \
     /models/qwen38fn --served-model-name qwen3.8-flash-next \
     --host 0.0.0.0 --port "$PORT" --trust-remote-code \

@@ -19,3 +19,7 @@ run 1: prompt_tokens=28228 ttft=17.1s total=17.3s prefill~1654 tok/s finish=stop
 -- prefill 128000
 run 1: prompt_tokens=112738 ttft=68.6s total=68.8s prefill~1643 tok/s finish=stop answer='PELICAN-7' OK
 == qwen38fn_tp1_mtp4_fp8_080 counting ceiling (peak row only) 12:41:56
+  c5: agg  175.4 tok/s | per-stream  35.1 | w2w med  9.11s p90  9.50s | TTFT  5.40s
+  c6: agg  194.0 tok/s | per-stream  32.4 | w2w med  9.87s p90  9.91s | TTFT  6.44s
+JSON -> results/sweep_qwen38fn_tp1_mtp4_fp8_080.json
+== qwen38fn_tp1_mtp4_fp8_080 done 12:45:14

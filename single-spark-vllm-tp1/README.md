@@ -67,7 +67,7 @@ One row per boot. Same weights resident in every row; only the KV pool moves.
 | 0.78 | 262,144 | fp8_e4m3 | eager | 0 | 1,136,939 | 14.7 | ~19 GB | serves; 200K prefill stress passed |
 | 0.82 | 262,144 | fp8_e4m3 | eager | 0 | 1,605,263 | 20.8 | ~13 GB | serves; 176K prefill stress passed (1,660 tok/s) |
 | **0.80** | **262,144** | **fp8_e4m3** | **piecewise** | **4** | **995,129** | **16.6** | **~16 GB** | **shipped default (this README's numbers)** |
-| 0.85 | 262,144 | fp8_e4m3 | piecewise | 4 | 1,170,740 | ~19.5 | ~10 GB | boots and serves, but sits at the memory floor; stress pending, not the default |
+| 0.85 | 262,144 | fp8_e4m3 | piecewise | 4 | 1,170,740 | ~19.5 | ~10 GB | serves and passed the 176K stress (1,571 tok/s), but MemAvailable sat at 9.8 GB afterwards: works, tight, not the default |
 
 MTP4's draft head costs roughly 290K tokens of pool at the same gmu. `free -g` on a GB10 counts page cache as used; the "free after boot" column is `MemAvailable`. Community reports put the danger line around 10 GB available (swap creep, OOM kills on huge prefills), so 0.80 with MTP is the shipped setting and 0.82 is the ceiling we would recommend without MTP.
 
@@ -108,7 +108,7 @@ MTP4 acceptance on this checkpoint: mean accepted length 3.56, 64% overall, per 
 |---|---|---|
 | 7K tokens | 5.9 s | 1,206 tok/s |
 | 28K tokens | 17.1 s | 1,654 tok/s |
-| 128K tokens | (running) | |
+| 113K tokens | 68.6 s | 1,643 tok/s |
 | 176K tokens (gmu 0.82, no MTP) | 106 s | 1,660 tok/s |
 | 200K tokens (gmu 0.78, no MTP) | 104 s | ~1,900 tok/s |
 
@@ -118,12 +118,12 @@ No graphs, no MTP, bf16 KV, gmu 0.72: 15.4 tok/s single stream on every category
 
 ### Counting ceiling (footnote, not a benchmark)
 
-The count-to-100 sweep is the last row of `results/` when present. It measures the best case for speculative decoding and is not representative of real work, which is why it is not in the tables above.
+Count-to-100 sweep (`results/sweep_qwen38fn_tp1_mtp4_fp8_080.json`), aggregate tok/s: x1 43.8, x2 89.9, x3 128.8, x4 151.9, x5 175.4, x6 194.0. This is the best case for speculative decoding (near-perfect draft acceptance) and is not representative of real work, which is why it is not in the tables above.
 
 ## Files
 
 - `patch/` the two patched files, their diffs against the nightly, the compilation overlay, `upstream-overlays/`
 - `launch/qwen38fn-nvidia-tp1.sh` single-Spark launcher
 - `tools/` benchmark harness (`bench_lane.sh`, `bench_categories.py`, `bench_sweep.py`, `stress_prefill.py`, `probe-qwen38fn.sh`)
-- `results/` raw JSON per run
+- `results/` raw JSON per run, the KV pool ledger, the harness and stress logs, and the chart images (`chart_*_all.png` is the one-image summary; `tools/make_tweet_charts.py` builds them from the JSON)
 - `research/` runner internals notes and the GB10 prior-art / pitfalls survey with the credit map

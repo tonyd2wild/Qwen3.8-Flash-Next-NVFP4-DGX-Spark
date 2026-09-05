@@ -82,3 +82,50 @@ if os.path.exists(kv_file):
             rows.append([cells[2], cells[3], cells[4], cells[6], cells[7], cells[10] or ""])
     if rows:
         table_png(rows, ["gmu", "Context", "KV dtype", "MTP", "KV pool (tokens)", "Free after boot"], os.path.join(RES, f"chart_{lane}_kv.png"), "KV pool by gpu-memory-utilization, one Spark, model weights identical in every row. Pick your own headroom.", highlight_col=4, colw=[0.09, 0.13, 0.13, 0.08, 0.2, 0.17])
+
+# ---- combined single-image version (all four tables on one canvas) ----
+def _table(ax, rows, header, sub, highlight_col=None, colw=None, fs=9.5):
+    ax.axis("off")
+    ax.text(0, 1.02, sub, fontsize=9.2, va="bottom", color=MUT, transform=ax.transAxes, linespacing=1.4)
+    tbl = ax.table(cellText=rows, colLabels=header, loc="center", cellLoc="center", colWidths=colw, bbox=(0, 0.0, 1, 0.84))
+    tbl.auto_set_font_size(False); tbl.set_fontsize(fs)
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor(RULE); cell.set_linewidth(0.6)
+        cell.set_facecolor(PANEL if r % 2 else "#1c2029"); cell.get_text().set_color(INK)
+        if r == 0: cell.set_facecolor("#232833"); cell.get_text().set_color(MUT); cell.get_text().set_fontweight("bold")
+        elif c == 0: cell.get_text().set_color(MUT); cell.get_text().set_fontweight("bold")
+        elif highlight_col is not None and c == highlight_col: cell.get_text().set_color(GOLD); cell.get_text().set_fontweight("bold")
+if "--combined" in sys.argv:
+    fig = plt.figure(figsize=(16, 10.5))
+    fig.text(0.02, 0.975, "Run Qwen 3.8 Flash on a Single DGX Spark GB10 on the OFFICIAL NVIDIA NVFP4 Quant", fontsize=17, fontweight="bold", color=INK, va="top")
+    fig.text(0.02, 0.940, "nvidia/Qwen3.8-Flash-Next-NVFP4, byte for byte, on one GB10 (128 GB): upstream vLLM + our PLE-on-disk patch. MTP4, FP8 KV, CUDA graphs, gmu 0.80, 262K context.\nThinking off, no prefix cache, real prompts only, cold prefill. Counting prompts excluded from every number.", fontsize=9.6, color=MUT, va="top", linespacing=1.5)
+    gs = fig.add_gridspec(2, 2, left=0.02, right=0.98, top=0.885, bottom=0.03, hspace=0.36, wspace=0.08, height_ratios=[1.0, 1.25])
+    # prose by load
+    rows = []
+    for c, d in sorted(runs.items()):
+        ttft, stream, agg = stats(d, "prose"); rows.append([f"x{c}", f"{ttft*1000:.0f} ms", f"{stream:.1f} tok/s", f"{agg:.1f} tok/s" if agg else "n/a"])
+    _table(fig.add_subplot(gs[0, 0]), rows, ["Load", "TTFT", "Prose per stream", "Aggregate, all prompts"], "PROSE by concurrent load. Per stream = one reply's speed; aggregate = total tokens/s across all streams.", highlight_col=2)
+    # prefill
+    prow = []
+    if prefill_file and os.path.exists(prefill_file):
+        for line in open(prefill_file):
+            m = re.search(r"prompt_tokens=(\d+) ttft=([\d.]+)s", line)
+            if m: n, t = int(m.group(1)), float(m.group(2)); prow.append([f"{n/1000:.0f}K tokens", f"{t:.1f} s", f"{n/t:,.0f} tok/s"])
+    _table(fig.add_subplot(gs[0, 1]), prow or [["n/a", "", ""]], ["Prompt", "Time to first token", "Prefill rate"], "COLD PREFILL, one request, no prefix cache. Needle question answered correctly in every run.", highlight_col=2)
+    # categories
+    hdr = ["Category"] + [f"x{c}" for c in sorted(runs)]
+    rows = []
+    for cat in CATS:
+        if not any(i["category"] == cat for i in list(runs.values())[0]["items"]): continue
+        rows.append([LABEL[cat]] + [f"{stats(d, cat)[1]:.1f}" for c, d in sorted(runs.items())])
+    aggs = "   ".join(f"x{c}: {stats(d)[2]:.1f}" for c, d in sorted(runs.items()) if stats(d)[2])
+    _table(fig.add_subplot(gs[1, 0]), rows, hdr, f"PER-STREAM tok/s by category and load (median of 5 real prompts each).\nAggregate tok/s across all streams:  {aggs}", highlight_col=1)
+    # kv ledger
+    krow = []
+    if os.path.exists(kv_file):
+        for line in open(kv_file):
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if len(cells) >= 8 and re.match(r"^\d+$", cells[0]) and re.match(r"^[\d,]+$", cells[7]):
+                krow.append([cells[2], cells[4], "MTP" + cells[6] if cells[6] != "0" else "no MTP", cells[7], cells[10] if len(cells) > 10 else ""])
+    _table(fig.add_subplot(gs[1, 1]), krow or [["n/a", "", "", "", ""]], ["gmu", "KV dtype", "MTP", "KV pool (tokens)", "Free after boot"], "KV POOL by gpu-memory-utilization at 262K context. Same weights in every row.\nPick your own headroom; shipped default = 0.80 with MTP4 and FP8 KV. Free = used / MemAvailable GB.", highlight_col=3, colw=[0.1, 0.16, 0.14, 0.24, 0.16], fs=9)
+    out = os.path.join(RES, f"chart_{lane}_all.png"); fig.savefig(out, dpi=170); plt.close(fig); print("->", out)

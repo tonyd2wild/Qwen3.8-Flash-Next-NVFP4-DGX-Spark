@@ -1,0 +1,4 @@
+run 1: prompt_tokens=7087 ttft=5.9s total=6.1s prefill~1206 tok/s finish=stop answer='PELICAN-7' OK
+run 1: prompt_tokens=28228 ttft=17.1s total=17.3s prefill~1654 tok/s finish=stop answer='PELICAN-7' OK
+run 1: prompt_tokens=112738 ttft=68.6s total=68.8s prefill~1643 tok/s finish=stop answer='PELICAN-7' OK
+run 1: prompt_tokens=176134 ttft=106.1s total=106.3s prefill~1660 tok/s finish=stop answer='PELICAN-7' OK

@@ -198,6 +198,37 @@ class PLEMmapTable:
         out[: rows.shape[0]].copy_(rows, non_blocking=True)
         return out[: rows.shape[0]].view(self.dtype)
 
+    # ------------------------------------------------------------ resident
+    def read_rows_contiguous(self, start: int, count: int, chunk_rows: int = 1 << 20) -> torch.Tensor:
+        """Read rows [start, start+count) sequentially into one pinned uint8
+        tensor [count, row_bytes]. Used by the resident mode: a TP rank pulls
+        its own slice of the table into memory once, at load time, with large
+        positional reads (no per-row syscalls)."""
+        if count <= 0:
+            return torch.empty((0, self.row_bytes), dtype=torch.uint8)
+        rb = self.row_bytes
+        try:
+            buf = torch.empty((count, rb), dtype=torch.uint8, pin_memory=True)
+        except Exception:
+            buf = torch.empty((count, rb), dtype=torch.uint8)
+        mv = memoryview(buf.numpy()).cast("B")
+        done = 0
+        while done < count:
+            row = start + done
+            s, l = divmod(row, self.shard_rows)
+            fd, off = self.shard_base[s]
+            n = min(chunk_rows, count - done, self.shard_rows - l)
+            dst = done * rb
+            want = n * rb
+            got = 0
+            while got < want:
+                r = os.preadv(fd, [mv[dst + got : dst + want]], off + l * rb + got)
+                if r <= 0:
+                    raise IOError(f"short PLE slice read at row {row} ({got} of {want} bytes)")
+                got += r
+            done += n
+        return buf
+
     # ------------------------------------------------------------------ info
     def describe(self) -> str:
         return (

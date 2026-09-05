@@ -39,6 +39,10 @@ from vllm.transformers_utils.configs.qwen4_exp import (
     Qwen4ExpTextConfig,
 )
 from vllm.utils.torch_utils import direct_register_custom_op
+from vllm.distributed import get_tensor_model_parallel_world_size, get_tp_group
+from vllm.logger import init_logger
+
+logger = init_logger(__name__)
 from vllm.v1.attention.backends.registry import MambaAttentionBackendEnum
 from vllm.v1.attention.backends.short_conv_attn import (
     PleShortConvAttentionBackend,
@@ -54,6 +58,15 @@ from .ops.ple_mmap import PLEMmapTable
 
 def _ple_mmap_enabled() -> bool:
     return _os.environ.get("QWEN4EXP_PLE_MMAP", "0") == "1"
+
+def _ple_resident_enabled() -> bool:
+    # Resident mode: same placeholder/shard-drop machinery as the disk mode, but
+    # each TP rank keeps ITS slice of the FP8 table as a plain GPU tensor behind
+    # the custom gather op. The table is not a Parameter, so torch.compile never
+    # sees it (no Inductor autotune copy, see vLLM PR #55272 by gau-nernst for
+    # that failure mode) and the fused compiled graph stays intact.
+    return _os.environ.get("QWEN4EXP_PLE_RESIDENT", "0") == "1"
+
 
 def _ple_mmap_threads() -> int | None:
     v = _os.environ.get("QWEN4EXP_PLE_MMAP_THREADS")
@@ -519,9 +532,48 @@ class Qwen4ExpNGramEmbedding(nn.Module):
         )
 
     def _ple_mmap_gather_into(self, ngram_ids: torch.Tensor, out: torch.Tensor) -> None:
+        resident = getattr(self, "_ple_resident", None)
+        if resident is not None:
+            # Rows owned by this rank come from the resident slice; rows owned by
+            # other ranks are written as zeros and filled by a byte-wise sum
+            # across TP (exactly one rank holds each row, so the sum is a copy).
+            start = self._ple_resident_start
+            local = ngram_ids.view(-1) - start
+            mask = (local >= 0) & (local < resident.shape[0])
+            idx = torch.where(mask, local, torch.zeros_like(local))
+            rows = torch.index_select(resident, 0, idx)
+            rows.mul_(mask.to(torch.uint8).unsqueeze(1))
+            out.copy_(rows)
+            if self._ple_tp_size > 1:
+                torch.distributed.all_reduce(out, group=get_tp_group().device_group)
+            return
         table = self._ple_mmap_table()
         rows = table.gather_cpu(ngram_ids.detach().to("cpu", dtype=torch.int64))
         out.copy_(rows, non_blocking=True)
+
+    def _ple_load_resident_slice(self) -> None:
+        """Resident mode: pull this rank's row range into a GPU uint8 tensor."""
+        table = self._ple_mmap_table()
+        emb = self.ngram_embedding
+        start = int(emb.shard_indices.org_vocab_start_index)
+        end = int(emb.shard_indices.org_vocab_end_index)
+        count = max(0, min(end, table.rows_total) - start)
+        device = emb.weight.device
+        chunk = 1 << 20  # rows per host read (160 MiB at 160 B/row)
+        slab = torch.empty((count, table.row_bytes), dtype=torch.uint8, device=device)
+        done = 0
+        while done < count:
+            n = min(chunk * 8, count - done)
+            host = table.read_rows_contiguous(start + done, n)
+            slab[done : done + n].copy_(host, non_blocking=False)
+            done += n
+        self._ple_resident = slab
+        self._ple_resident_start = start
+        self._ple_tp_size = int(get_tensor_model_parallel_world_size())
+        logger.info(
+            "PLE resident slice: rows [%d, %d) = %.2f GiB on %s (tp=%d)",
+            start, start + count, count * table.row_bytes / 2**30, device, self._ple_tp_size,
+        )
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         """Load hash buffers and checkpoint-split embedding rows."""
@@ -599,6 +651,8 @@ class Qwen4ExpNGramEmbedding(nn.Module):
             loaded.update(AutoWeightsLoader(self).load_weights(regular_weights))
         if getattr(self.ngram_embedding, "_ple_mmap", False):
             self._ple_mmap_table()  # eager construction: fds + thread pool, outside any tracing
+            if _ple_resident_enabled():
+                self._ple_load_resident_slice()
         return loaded
 
 

@@ -3,7 +3,7 @@
 # Same stack as the single-Spark default: PLE table on disk (each rank reads its own copy: local NVMe, or an NFS mount of
 # the head's copy via MODEL_HOST=/mnt/reddie-models/...; measured either way, see the README), MTP4, FP8 KV,
 # piecewise CUDA graphs, 262K. Usage: qwen38fn-nvidia-tp4.sh <0|1|2|3>  (run workers FIRST: 3 Bluey, 2 Asusi, 1 Spark4, then 0 = Reddie head)
-# Env knobs: IMAGE, PLE_MODE (mmap|none), GRAPHS (eager|piecewise|default), KV_DTYPE, OVERLAYS, PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, EXTRA
+# Env knobs: IMAGE, PLE_MODE (mmap|resident|none), GRAPHS (eager|piecewise|default), KV_DTYPE, OVERLAYS, PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, EXTRA
 set -euo pipefail
 NODE_RANK="${1:?usage: qwen38fn-nvidia-tp4.sh <0|1|2|3>}"
 IMAGE="${IMAGE:-vllm/vllm-openai:nightly-8a728663c1c3eeace834a95f5654fa653cc1998c}"
@@ -25,8 +25,10 @@ CACHE_HOST="/var/tmp/qwen38fn-vllm-cache"; mkdir -p "$CACHE_HOST"
 test -f "$MODEL_HOST/config.json" || { echo "MODEL MISSING at $MODEL_HOST (each rank needs a readable copy for the disk-backed table: local NVMe or an NFS mount)" >&2; exit 3; }
 VP=/usr/local/lib/python3.12/dist-packages/vllm
 PLE_ENV=(); PLE_MOUNT=()
-if [ "$PLE_MODE" = "mmap" ]; then
+if [ "$PLE_MODE" = "mmap" ] || [ "$PLE_MODE" = "resident" ]; then
   PLE_ENV=(-e QWEN4EXP_PLE_MMAP=1 -e QWEN4EXP_PLE_MMAP_THREADS="${PLE_WORKERS:-64}")
+  # resident: each rank keeps its slice of the FP8 table as a plain GPU tensor behind our gather op (TP4: 11.9 GiB per rank)
+  [ "$PLE_MODE" = "resident" ] && PLE_ENV+=(-e QWEN4EXP_PLE_RESIDENT=1)
   PLE_MOUNT=(-v "$PATCH_DIR/ple_layer.py:$VP/models/qwen4_exp/nvidia/ple_layer.py:ro"
              -v "$PATCH_DIR/ple_mmap.py:$VP/models/qwen4_exp/nvidia/ops/ple_mmap.py:ro")
 fi

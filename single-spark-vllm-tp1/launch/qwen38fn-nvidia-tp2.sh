@@ -2,9 +2,9 @@
 # Qwen3.8-Flash-Next NVFP4 (nvidia/ModelOpt) on TWO DGX Sparks, TP2 over the RoCE fabric, vLLM. Kai / Tech2Wild 2026-09-05.
 # Same stack as the single-Spark default: PLE table on disk (each rank reads its own local copy), MTP4, FP8 KV,
 # piecewise CUDA graphs, 262K. Usage: qwen38fn-nvidia-tp2.sh <0|1>   (run rank 1 = worker FIRST, then rank 0 = head)
-# Env knobs: IMAGE, PLE_MODE (mmap = table on disk | none = table resident in unified memory, each rank holds its half),
+# Env knobs: IMAGE, PLE_MODE (mmap = table on disk [CONTEXT] | resident = our patch keeps each rank's slice in memory [SPEED] | none = stock loader, needs GRAPHS=nocompile),
 #   GRAPHS (eager|piecewise|full|nocompile|default), LANE (B = Reddie head + Spark4 [default] | A = Bluey head + Asusi), KV_DTYPE, OVERLAYS,
-#   PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, MPORT, EXTRA
+#   PATCH_DIR, GMU, MAXLEN, SEQS, MTP, PORT, MPORT, TOOL_PARSER (qwen3_xml|qwen3_coder), EXTRA
 set -euo pipefail
 NODE_RANK="${1:?usage: qwen38fn-nvidia-tp2.sh <0|1>}"
 IMAGE="${IMAGE:-vllm/vllm-openai:nightly-8a728663c1c3eeace834a95f5654fa653cc1998c}"
@@ -29,8 +29,11 @@ CACHE_HOST="/var/tmp/qwen38fn-vllm-cache"; mkdir -p "$CACHE_HOST"
 test -f "$MODEL_HOST/config.json" || { echo "MODEL MISSING at $MODEL_HOST (each rank needs a readable copy: local NVMe, or an NFS mount when PLE_MODE=none)" >&2; exit 3; }
 VP=/usr/local/lib/python3.12/dist-packages/vllm
 PLE_ENV=(); PLE_MOUNT=()
-if [ "$PLE_MODE" = "mmap" ]; then
+if [ "$PLE_MODE" = "mmap" ] || [ "$PLE_MODE" = "resident" ]; then
   PLE_ENV=(-e QWEN4EXP_PLE_MMAP=1 -e QWEN4EXP_PLE_MMAP_THREADS="${PLE_WORKERS:-64}")
+  # resident: each rank keeps its slice of the FP8 table as a plain GPU tensor behind our gather op
+  # (compile stays on, no Inductor copy of the table). TP2: 23.8 GiB per rank, TP4: 11.9 GiB.
+  [ "$PLE_MODE" = "resident" ] && PLE_ENV+=(-e QWEN4EXP_PLE_RESIDENT=1)
   PLE_MOUNT=(-v "$PATCH_DIR/ple_layer.py:$VP/models/qwen4_exp/nvidia/ple_layer.py:ro"
              -v "$PATCH_DIR/ple_mmap.py:$VP/models/qwen4_exp/nvidia/ops/ple_mmap.py:ro")
 fi
@@ -80,7 +83,7 @@ docker run --gpus all -d --name "$NAME" --restart no \
     --quantization modelopt --tensor-parallel-size 2 \
     --max-model-len "$MAXLEN" --max-num-seqs "$SEQS" --gpu-memory-utilization "$GMU" \
     --no-enable-flashinfer-autotune ${PREFIX_CACHE_ARG:---no-enable-prefix-caching} \
-    --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser qwen3_xml \
+    --reasoning-parser qwen3 --enable-auto-tool-choice --tool-call-parser "${TOOL_PARSER:-qwen3_xml}" \
     --default-chat-template-kwargs "{\"enable_thinking\": false}" \
     "${SPEC[@]}" "${GRAPH_ARGS[@]}" "${KV_ARGS[@]}" \
     --distributed-executor-backend mp --nnodes 2 --node-rank "$NODE_RANK" \

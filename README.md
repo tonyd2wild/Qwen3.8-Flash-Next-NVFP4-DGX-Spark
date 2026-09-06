@@ -109,6 +109,27 @@ Full tables, boot notes and raw JSON in `single-spark-vllm-tp1/README.md`. One S
 
 Details, diffs, launcher knobs, the harness and every raw result: [`single-spark-vllm-tp1/README.md`](single-spark-vllm-tp1/README.md).
 
+## Single Spark, evening of 2026-09-05: graphs with the table on disk, and a cheaper draft
+
+Two pieces of our own code landed tonight, each measured alone on one Spark (gmu 0.80, FP8 KV, 262K, same 40 prompts):
+
+1. **Staged gather (`PLE_MODE=staged`)**: the rows for each step are read from disk inside the model state's `prepare_inputs`, before the forward, into a fixed GPU buffer that the decode CUDA graph reads. That lets one Spark run `{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY"}` with the 47.7 GB table still on disk, which the in-forward gather could not (a host copy inside graph capture is refused). No vLLM core change: the runner already calls the model state before every step. The shape of the idea is Trosfy's vLLM PR #54129 (gather in input prep, stable buffers); the implementation here is independent, on top of our preadv reader.
+2. **Reduced-vocabulary drafting (`DRAFT_VOCAB=65536`)**: the MTP draft head's output projection is computed only for the 65,536 lowest token ids (BPE merge order as the frequency proxy, so no corpus is needed) and every other id is masked to minus infinity, so the target still verifies over the full vocabulary and outputs stay exact. The idea is FR-Spec (frequency-ranked speculative sampling); MiaAI-Lab demonstrated a corpus-built 65,536-token draft vocabulary on this model (AGPL code, not used here). Ours is an overlay of vLLM's `mtp.py`, TP-aware.
+
+Single stream, tok/s:
+
+| Single Spark boot | Median (40) | Prose | Coding | Math | JSON | HTML | Narrative | TTFT |
+|---|---|---|---|---|---|---|---|---|
+| Shipped (disk, piecewise compile, MTP4, 8 seqs) | 32.5 | 21.7 | 34.4 | 36.0 | 43.7 | 42.4 | 18.7 | 300 ms |
+| Eager + recipe (disk, no graphs, MTP3, 6 seqs, chunk 4096) | 35.2 | 23.3 | 37.2 | 38.4 | 40.0 | 38.8 | 23.2 | 290 ms |
+| Eager + recipe, MTP4 / 8 seqs | 34.1 | 21.1 | 36.2 | 36.8 | 42.1 | 39.8 | 20.8 | 330 ms |
+| Eager + recipe + reduced-vocab draft (65,536) | 37.7 | 27.0 | 42.2 | 43.7 | 44.3 | 44.6 | 26.9 | 340 ms |
+| **Staged gather + decode CUDA graphs + recipe** (table on disk) | 37.4 | 25.2 | 39.9 | 39.8 | 42.1 | 42.2 | 24.6 | 310 ms |
+
+Both pieces are worth about 15 percent on prose on their own, from different places (graph replay vs a 4x cheaper draft projection). Their combination is the next boot. Quality scores are equal across all rows (the only misses are word-count caps). Load rows, prefill and the KV ledger rows for each boot are under `results/`.
+
+Also measured tonight on the TP2 SPEED profile, none adopted: expert parallel (single stream -4%), MTP4 with `index_share_for_mtp_iteration` (+3% median, prose -6%), `--async-scheduling` (-3% single stream, TTFT worse at every load), NCCL pinned to 8 channels (-3%, within noise). Knobs named by Chuck 208 (@CK2084) and TJ Klug (T-Klug/Qwen3.8-Flash-Next-NVFP4-2xDGX-Spark-vLLM); credited for the pointers even where they did not move this quant.
+
 ## SPEED and CONTEXT profiles (TP2 default changed 2026-09-05 evening)
 
 Every lane runs the same official NVIDIA NVFP4 checkpoint on the same vLLM build. The one decision a deployer makes is where the 47.7 GB n-gram table lives, and that sets the profile:

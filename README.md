@@ -126,7 +126,9 @@ Single stream, tok/s:
 | Eager + recipe + reduced-vocab draft (65,536) | 37.7 | 27.0 | 42.2 | 43.7 | 44.3 | 44.6 | 26.9 | 340 ms |
 | **Staged gather + decode CUDA graphs + recipe** (table on disk) | 37.4 | 25.2 | 39.9 | 39.8 | 42.1 | 42.2 | 24.6 | 310 ms |
 
-Both pieces are worth about 15 percent on prose on their own, from different places (graph replay vs a 4x cheaper draft projection). Their combination is the next boot. Quality scores are equal across all rows (the only misses are word-count caps). Load rows, prefill and the KV ledger rows for each boot are under `results/`.
+Both pieces are worth about 15 percent on prose on their own, from different places (graph replay vs a 4x cheaper draft projection). Their combination is the next boot.
+
+Load and ceiling rows for the same two boots (counting prompt, footnote only): staged gather + graphs holds the shipped recipe's ceiling exactly (43.7 tok/s at one stream, 189.5 aggregate at six, against 43.8 / 194.0 shipped), so the graphs cost nothing under load; the reduced-vocab draft lifts it (48.7 at one stream, 206.2 aggregate at six). Cold prefill at 7K / 28K / 113K: staged 1,283 / 1,760 / 1,756 tok/s, draft vocab 1,179 / 1,739 / 1,748, shipped 1,277 / 1,745 / 1,758 (the draft has no prefill work, so the differences are run noise). Quality scores are equal across all rows (the only misses are word-count caps). Load rows, prefill and the KV ledger rows for each boot are under `results/`.
 
 Also measured tonight on the TP2 SPEED profile, none adopted: expert parallel (single stream -4%), MTP4 with `index_share_for_mtp_iteration` (+3% median, prose -6%), `--async-scheduling` (-3% single stream, TTFT worse at every load), NCCL pinned to 8 channels (-3%, within noise). Knobs named by Chuck 208 (@CK2084) and TJ Klug (T-Klug/Qwen3.8-Flash-Next-NVFP4-2xDGX-Spark-vLLM); credited for the pointers even where they did not move this quant.
 

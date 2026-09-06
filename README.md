@@ -8,7 +8,43 @@ It fits because the 47.68 GiB FP8 n-gram (PLE) table never gets loaded: our patc
 
 ![Qwen3.8-Flash-Next NVFP4 on one DGX Spark: prose by load, cold prefill, per-category speeds, KV pool by gmu](single-spark-vllm-tp1/results/chart_qwen38fn_tp1_mtp4_fp8_080_all.png)
 
-## Shipped configuration
+## Default configuration (2026-09-05 evening): 43.9 tok/s median on one Spark
+
+Table on disk with the **staged gather** (the 16 rows per token are read in the model state's `prepare_inputs`, before the forward, into a fixed GPU buffer, so decode runs as CUDA graphs with torch.compile off), **reduced-vocabulary MTP draft** (the draft head projects onto the 65,536 lowest token ids and masks the rest, target verifies over the full vocabulary, outputs exact), MTP3, 6 sequences, 4096-token prefill chunk, FP8 KV cache, `gpu-memory-utilization 0.80`, 262,144-token context, thinking off, prefix caching off, vLLM nightly `8a728663`. Both pieces are in `single-spark-vllm-tp1/patch/`, written for this lane; the ideas they follow are credited below.
+
+```bash
+bash single-spark-vllm-tp1/launch/qwen38fn-nvidia-tp1.sh      # defaults = this configuration
+# the morning stack, if you want it back: PLE_MODE=mmap GRAPHS=piecewise MTP=4 SEQS=8 CHUNK= DRAFT_VOCAB=0 bash single-spark-vllm-tp1/launch/qwen38fn-nvidia-tp1.sh
+```
+
+KV pool: **1,027,392 tokens** (3.9 concurrent 262K requests). Weights load in about 10.5 minutes.
+
+Same harness as everything below (40 real prompts, 8 categories x 5, thinking off, no prefix cache, cold prefill; counting prompts excluded):
+
+| Category | tok/s | TTFT | morning stack |
+|---|---|---|---|
+| Prose | 29.0 | 0.26 s | 21.7 |
+| Coding | 44.3 | 0.90 s | 34.4 |
+| Math / logic | 45.6 | 0.38 s | 36.0 |
+| JSON | 49.3 | 0.34 s | 43.7 |
+| HTML | 47.6 | 0.28 s | 42.4 |
+| Narrative | 28.5 | 0.37 s | 18.7 |
+| Summary | 35.4 | 0.24 s | 21.2 |
+| Format | 32.4 | 0.24 s | 22.2 |
+| **Median of all 40 prompts** | **43.9** | **0.30 s** | 32.5 |
+
+| Load | TTFT | Per stream (all prompts) | Prose per stream | Aggregate | morning stack (per stream / aggregate) |
+|---|---|---|---|---|---|
+| x1 | 0.30 s | 43.9 | 29.0 | 43.9 | 32.5 / 32.5 |
+| x2 | 0.36 s | 33.4 | 22.9 | 43.9 | 31.0 / 38.8 |
+| x4 | 0.47 s | 26.4 | 21.9 | 47.1 | 23.0 / 42.0 |
+| x6 | 0.62 s | 21.7 | 17.4 | 68.8 | 19.2 / 62.5 |
+
+Cold prefill: 7K tokens 1,269 tok/s (TTFT 5.6 s), 28K 1,757 (16.1 s), 113K 1,760 (64.0 s), needle answered at every rung. The one number that got worse is the coding TTFT (0.90 s against 0.27 s): the coding prompts are the longest in the set, and every compile-off boot tonight (eager 1.01 s, staged 0.97 s, draft alone 1.22 s, both 0.90 s) shows the same thing, so it comes with running prefill without torch.compile's fused kernels; we have not separated that from the 4096 chunk. Quality score 0.88, same as the morning stack (the misses are word-count caps). Count-to-100 peak, footnote only: 49.4 at one stream, 209.9 aggregate at six (morning stack 43.8 / 194.0). Boot by boot how this was reached, with the MTP4 variant that lost, is in the evening section below and in `single-spark-vllm-tp1/results/kv_pool_ledger.md` (rows 23 to 27).
+
+## Morning stack of 2026-09-05 (superseded the same evening, kept for the record)
+
+### Shipped configuration (morning)
 
 MTP4 on NVIDIA's own draft head, FP8 KV cache, piecewise CUDA graphs, `gpu-memory-utilization 0.80`, 262,144-token context (1M with YaRN is possible, not measured here), thinking off by default, prefix caching off, vLLM nightly `8a728663` (2026-09-04).
 
@@ -125,8 +161,10 @@ Single stream, tok/s:
 | Eager + recipe, MTP4 / 8 seqs | 34.1 | 21.1 | 36.2 | 36.8 | 42.1 | 39.8 | 20.8 | 330 ms |
 | Eager + recipe + reduced-vocab draft (65,536) | 37.7 | 27.0 | 42.2 | 43.7 | 44.3 | 44.6 | 26.9 | 340 ms |
 | **Staged gather + decode CUDA graphs + recipe** (table on disk) | 37.4 | 25.2 | 39.9 | 39.8 | 42.1 | 42.2 | 24.6 | 310 ms |
+| **Both: staged gather + graphs + reduced-vocab draft, MTP3** (new single-Spark default) | **43.9** | **29.0** | 44.3 | 45.6 | 49.3 | 47.6 | 28.5 | 300 ms |
+| Both, MTP4 (capture 5..30) | 43.6 | 26.7 | 43.6 | 46.6 | 50.6 | 49.9 | 26.3 | 340 ms |
 
-Both pieces are worth about 15 percent on prose on their own, from different places (graph replay vs a 4x cheaper draft projection). Their combination is the next boot.
+Both pieces are worth about 15 percent on prose on their own, from different places (graph replay vs a 4x cheaper draft projection), and they stack: together, 43.9 tok/s median single stream against the 32.5 shipped this morning (+35%), prose 29.0 against 21.7. Under load the combination leads at every width (x2 33.4 per stream / 43.9 aggregate, x4 26.4 / 47.1, x6 21.7 / 68.8, against 31.0 / 38.8, 23.0 / 42.0 and 19.2 / 62.5 shipped), with TTFT at six streams down from 690 to 620 ms. The MTP4 variant of the same combination trails MTP3 at every load (single stream 43.6, prose 26.7; x4 23.9 / 44.6), so MTP3 is the single-Spark default from 9 PM on: `~/qwen38fn-nvidia-tp1.sh` with no knobs now boots staged gather + decode graphs + reduced-vocab draft + MTP3 + 6 seqs + 4096 chunk (KV pool 1,027,392 at gmu 0.80). The morning stack is one line, `PLE_MODE=mmap GRAPHS=piecewise MTP=4 SEQS=8 CHUNK= DRAFT_VOCAB=0`.
 
 Load and ceiling rows for the same two boots (counting prompt, footnote only): staged gather + graphs holds the shipped recipe's ceiling exactly (43.7 tok/s at one stream, 189.5 aggregate at six, against 43.8 / 194.0 shipped), so the graphs cost nothing under load; the reduced-vocab draft lifts it (48.7 at one stream, 206.2 aggregate at six). Cold prefill at 7K / 28K / 113K: staged 1,283 / 1,760 / 1,756 tok/s, draft vocab 1,179 / 1,739 / 1,748, shipped 1,277 / 1,745 / 1,758 (the draft has no prefill work, so the differences are run noise).
 
@@ -158,39 +196,39 @@ Why compile is off in SPEED: with the table resident, torch.compile's Inductor a
 **TP4 note (2026-09-05, 5:20 PM):** the SPEED settings do not carry to four Sparks as-is. TP4 with the table in memory, compile off, MTP3, 6 seqs and the 4096 chunk (expert parallel, gmu 0.70, pool 6.25M) measured 29.9 tok/s median single stream against 40.5 for TP4 CONTEXT. With expert parallel across four boxes, losing compile costs more than the recipe settings return. TP4 therefore stays on CONTEXT until the compile-on variants are measured (disk table + recipe settings, then table in memory + compile, which fits at TP4 because the compile-time duplicate is only 12 GB per box). Rows for every boot are in `results/kv_pool_ledger.md`.
 
 ### Single stream (x1), tok/s
-| | 1 Spark (CONTEXT) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
-|---|---|---|---|---|
-| Prose | 21.7 | 24.1 | 37.2 | 26.4 |
-| Coding | 34.4 | 37.3 | 56.0 | 44.5 |
-| Math / logic | 36.0 | 38.9 | 55.9 | 47.2 |
-| JSON | 43.7 | 38.2 | 61.9 | 47.8 |
-| HTML | 42.4 | 45.1 | 61.1 | 50.7 |
-| Narrative | 18.7 | 21.8 | 36.5 | 25.8 |
-| Summary | 21.2 | 26.0 | 42.8 | 27.3 |
-| Format | 22.2 | 25.4 | 38.4 | 26.8 |
-| **Median of all 40** | **32.5** | **35.8** | **53.7** | **40.5** |
-| TTFT (ms) | 300 | 250 | 180 | 220 |
+| | 1 Spark (morning) | 1 Spark (new default) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
+|---|---|---|---|---|---|
+| Prose | 21.7 | 29.0 | 24.1 | 37.2 | 26.4 |
+| Coding | 34.4 | 44.3 | 37.3 | 56.0 | 44.5 |
+| Math / logic | 36.0 | 45.6 | 38.9 | 55.9 | 47.2 |
+| JSON | 43.7 | 49.3 | 38.2 | 61.9 | 47.8 |
+| HTML | 42.4 | 47.6 | 45.1 | 61.1 | 50.7 |
+| Narrative | 18.7 | 28.5 | 21.8 | 36.5 | 25.8 |
+| Summary | 21.2 | 35.4 | 26.0 | 42.8 | 27.3 |
+| Format | 22.2 | 32.4 | 25.4 | 38.4 | 26.8 |
+| **Median of all 40** | **32.5** | **43.9** | **35.8** | **53.7** | **40.5** |
+| TTFT (ms) | 300 | 300 | 250 | 180 | 220 |
 
 ### Under load (per stream tok/s / aggregate tok/s / TTFT)
-| Load | 1 Spark (CONTEXT) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
-|---|---|---|---|---|
-| x2 per stream / aggregate / TTFT | 31.0 / 38.8 / 350 ms | 32.1 / 40.6 / 290 ms | 47.2 / 57.7 / 220 ms | 33.4 / 47.1 / 250 ms |
-| x4 per stream / aggregate / TTFT | 23.0 / 42.0 / 440 ms | 27.8 / 43.1 / 340 ms | 37.4 / 68.1 / 260 ms | 32.1 / 51.1 / 310 ms |
-| x6 per stream / aggregate / TTFT | 19.2 / 62.5 / 690 ms | 22.3 / 65.5 / 410 ms | 32.9 / 97.9 / 310 ms | 28.5 / 87.4 / 370 ms |
+| Load | 1 Spark (morning) | 1 Spark (new default) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
+|---|---|---|---|---|---|
+| x2 per stream / aggregate / TTFT | 31.0 / 38.8 / 350 ms | 33.4 / 43.9 / 360 ms | 32.1 / 40.6 / 290 ms | 47.2 / 57.7 / 220 ms | 33.4 / 47.1 / 250 ms |
+| x4 per stream / aggregate / TTFT | 23.0 / 42.0 / 440 ms | 26.4 / 47.1 / 470 ms | 27.8 / 43.1 / 340 ms | 37.4 / 68.1 / 260 ms | 32.1 / 51.1 / 310 ms |
+| x6 per stream / aggregate / TTFT | 19.2 / 62.5 / 690 ms | 21.7 / 68.8 / 620 ms | 22.3 / 65.5 / 410 ms | 32.9 / 97.9 / 310 ms | 28.5 / 87.4 / 370 ms |
 
 ### Cold prefill, tok/s (needle answered correctly at every rung)
-| Prompt | 1 Spark (CONTEXT) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
-|---|---|---|---|---|
-| 7K | 1,206 | 1,433 | 1,754 | 1,378 |
-| 28K | 1,654 | 2,093 | 2,784 | 2,453 |
-| 112K | 1,643 | 2,061 | 2,708 | 2,299 |
+| Prompt | 1 Spark (morning) | 1 Spark (new default) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
+|---|---|---|---|---|---|
+| 7K | 1,206 | 1,269 | 1,433 | 1,754 | 1,378 |
+| 28K | 1,654 | 1,757 | 2,093 | 2,784 | 2,453 |
+| 112K | 1,643 | 1,760 | 2,061 | 2,708 | 2,299 |
 
 ### KV pool
-| | 1 Spark (CONTEXT) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
-|---|---|---|---|---|
-| KV pool (tokens) | 995,129 | 5,874,061 | 1,970,051 | 9,088,133 |
+| | 1 Spark (morning) | 1 Spark (new default) | TP2 CONTEXT (old default) | TP2 SPEED (new default) | TP4 CONTEXT |
+|---|---|---|---|---|---|
+| KV pool (tokens) | 995,129 | 1,027,392 | 5,874,061 | 1,970,051 | 9,088,133 |
 
-Counting-to-100 ceiling (footnote, never a headline), x1 / x6 aggregate: 1 Spark (CONTEXT) 44 / 194; TP2 CONTEXT (old default) 51 / 234; TP2 SPEED (new default) 64 / 309; TP4 CONTEXT 54 / 262. Quality scores equal within noise on every lane (the two SPEED prompts that lost points ran 1 and 4 words over a word cap).
+Counting-to-100 ceiling (footnote, never a headline), x1 / x6 aggregate: 1 Spark (morning) 44 / 194; 1 Spark (new default) 49 / 210; TP2 CONTEXT (old default) 51 / 234; TP2 SPEED (new default) 64 / 309; TP4 CONTEXT 54 / 262. Quality scores equal within noise on every lane (the two SPEED prompts that lost points ran 1 and 4 words over a word cap).
 
 ## Two Sparks (TP2), CONTEXT profile, same stack as one Spark
 

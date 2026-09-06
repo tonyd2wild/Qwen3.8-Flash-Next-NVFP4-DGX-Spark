@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # Qwen3.8-Flash-Next NVFP4 (nvidia/ModelOpt) on ONE DGX Spark, TP1, vLLM. Kai 2026-09-04.
-# Defaults = the shipped production stack (2026-09-05): PLE table on disk, MTP4, FP8 KV, piecewise CUDA graphs, gmu 0.80, 262K.
-# Env knobs: IMAGE, PLE_MODE (mmap|offload|none), GRAPHS (eager|piecewise|default), KV_DTYPE (auto|fp8_e4m3|nvfp4), OVERLAYS (1|0), PATCH_DIR, GMU, MAXLEN, SEQS, MTP (0|N), PORT, EXTRA, PREFIX_CACHE_ARG (default off: GDN prefix-cache crash vLLM #54173 by brainatworkharris, unverified here)
+# Defaults = the single-Spark default as of 2026-09-05 evening: PLE table on disk with the STAGED gather (rows fetched in
+# prepare_inputs, decode CUDA graphs without torch.compile), reduced-vocab MTP draft (65,536 ids), MTP3, 6 seqs, 4096-token
+# prefill chunk, FP8 KV, gmu 0.80, 262K. Measured 43.9 tok/s median single stream (prose 29.0), 68.8 aggregate at six.
+# The earlier shipped stack is one line: PLE_MODE=mmap GRAPHS=piecewise MTP=4 SEQS=8 CHUNK= DRAFT_VOCAB=0 (32.5 median).
+# Env knobs: IMAGE, PLE_MODE (staged|mmap|offload|none), GRAPHS (nocompile|eager|piecewise|default), CAPTURE_SIZES, CHUNK, DRAFT_VOCAB (0 = off), KV_DTYPE (auto|fp8_e4m3|nvfp4), OVERLAYS (1|0), PATCH_DIR, GMU, MAXLEN, SEQS, MTP (0|N), PORT, EXTRA, PREFIX_CACHE_ARG (default off: GDN prefix-cache crash vLLM #54173 by brainatworkharris, unverified here)
 set -euo pipefail
 IMAGE="${IMAGE:-vllm/vllm-openai:nightly-8a728663c1c3eeace834a95f5654fa653cc1998c}"
 NAME="${NAME:-vllm_qwen38fn}"
 MODEL_HOST="/var/tmp/models/Qwen3.8-Flash-Next-NVFP4-nvidia"
 PATCH_DIR="${PATCH_DIR:-$HOME/patches/qwen4exp-ple-mmap}"
-PLE_MODE="${PLE_MODE:-mmap}"
-GMU="${GMU:-0.80}"; MAXLEN="${MAXLEN:-262144}"; SEQS="${SEQS:-8}"; MTP="${MTP:-4}"; PORT="${PORT:-8000}"
-CHUNK="${CHUNK:-}"                   # --max-num-batched-tokens; 4096 under test for the single-Spark default (2026-09-05)
+PLE_MODE="${PLE_MODE:-staged}"
+GMU="${GMU:-0.80}"; MAXLEN="${MAXLEN:-262144}"; SEQS="${SEQS:-6}"; MTP="${MTP:-3}"; PORT="${PORT:-8000}"
+CHUNK="${CHUNK-4096}"                # --max-num-batched-tokens; 4096 = single-Spark default (2026-09-05); CHUNK= (set, empty) for vLLM's default
 CACHE_HOST="/var/tmp/qwen38fn-vllm-cache"; mkdir -p "$CACHE_HOST"
 test -f "$MODEL_HOST/config.json" || { echo "MODEL MISSING at $MODEL_HOST" >&2; exit 3; }
 PLE_ENV=(); case "$PLE_MODE" in
@@ -29,7 +32,8 @@ KV_DTYPE="${KV_DTYPE:-fp8_e4m3}"; KV_ARGS=(); if [ "$KV_DTYPE" != "auto" ]; then
 # DRAFT_VOCAB=65536: reduced-vocabulary drafting for the MTP head (our overlay of vLLM's mtp.py; idea FR-Spec, shown on this model by MiaAI-Lab)
 VP=/usr/local/lib/python3.12/dist-packages/vllm
 DRAFT_ENV=(); DRAFT_MOUNT=()
-if [ -n "${DRAFT_VOCAB:-}" ]; then
+DRAFT_VOCAB="${DRAFT_VOCAB:-65536}"
+if [ -n "$DRAFT_VOCAB" ] && [ "$DRAFT_VOCAB" != "0" ]; then
   DRAFT_ENV=(-e QWEN4EXP_DRAFT_VOCAB="$DRAFT_VOCAB")
   DRAFT_MOUNT=(-v "$PATCH_DIR/mtp_draft_vocab.py:$VP/models/qwen4_exp/nvidia/mtp.py:ro")
 fi
@@ -48,7 +52,7 @@ if [ "$OVERLAYS" = "1" ]; then
                  -v "$PATCH_DIR/upstream-overlays/platforms_interface.py:$VP/platforms/interface.py:ro"
                  -v "$PATCH_DIR/upstream-overlays/modelopt.py:$VP/model_executor/layers/quantization/modelopt.py:ro")
 fi
-GRAPHS="${GRAPHS:-piecewise}"; GRAPH_ARGS=(); GRAPH_MOUNT=()
+GRAPHS="${GRAPHS:-nocompile}"; CAPTURE_SIZES="${CAPTURE_SIZES-4,8,12,16,20,24}"; GRAPH_ARGS=(); GRAPH_MOUNT=()
 case "$GRAPHS" in
   eager)     GRAPH_ARGS=(--enforce-eager) ;;
   piecewise) GRAPH_ARGS=(--compilation-config '{"cudagraph_mode":"PIECEWISE"}')

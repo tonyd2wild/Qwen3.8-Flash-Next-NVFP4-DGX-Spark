@@ -4,7 +4,7 @@ NVIDIA's own checkpoint, `nvidia/Qwen3.8-Flash-Next-NVFP4` (124 GB on disk: 125B
 
 It fits because the 47.68 GiB FP8 n-gram (PLE) table never gets loaded: our patch leaves it on the NVMe and reads the 16 rows each token needs on demand. About 76 GiB of real weights stay resident, the rest of the pool is KV cache.
 
-**Default lane: [`single-spark-vllm-tp1/`](single-spark-vllm-tp1/)** (patch, launcher, harness, results, research and credits). The original 2x Spark SGLang TP2 deployment lives on unchanged in [`lanes/sglang-tp2/`](lanes/sglang-tp2/).
+**Default lane: [`single-spark-vllm-tp1/`](single-spark-vllm-tp1/)** (patch, launcher, harness, results, research and credits). The original 2x Spark SGLang TP2 deployment lives on unchanged in [`lanes/sglang-tp2/`](lanes/sglang-tp2/). **First time here? [GETTING-STARTED.md](GETTING-STARTED.md)** walks from an empty Spark to a working OpenAI-compatible endpoint (checkpoint download, patch placement, launch, health checks, Cline/editor client config).
 
 ![Qwen3.8-Flash-Next NVFP4 on one DGX Spark: prose by load, cold prefill, per-category speeds, KV pool by gmu](single-spark-vllm-tp1/results/chart_qwen38fn_tp1_mtp4_fp8_080_all.png)
 
